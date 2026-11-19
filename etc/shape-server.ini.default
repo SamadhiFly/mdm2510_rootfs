@@ -1,0 +1,50 @@
+[shell]
+login=none
+listen_address=:11200
+
+[command_port]
+login=none
+listen_address=%COMMAND_PORT_ADDRESS%
+
+[watchdog]
+max_memory_usage=%MAX_MEM_USAGE_MB% MB
+
+[logging]
+log_level=verbose
+log_file=<syslog>
+
+[general]
+scheduling_priority=realtime-roundrobin 1
+config_directory=/etc/tellishape_config/
+license_file=/etc/license-shape.ini
+cpu_affinity_list=%CPU_AFFINITY_LIST%
+
+[shaping_feedback]
+## This section configures TelliShape Feedback specific parameters.
+name=tnfb0
+listen_address=%TELLISHAPE_FEEDBACK%
+#          Listen to Tellishape feedback and normal traffic.
+
+[queue_status]
+queue_status_interval=25msec
+destination_address=127.0.0.1:5502
+name=qgroup0
+
+[encapsulation_parameters]
+encapsulation=GSE
+frame_size=normal
+checksum=CRC
+merging_slicing_mode=on
+acm_mode=VCM
+
+[encapsulator]
+name=encap0
+mode=S2BBFoEth
+encapsulation_interval=20 ms
+destination_address=229.2.1.4:12345 dev mod src 1.2.3.4
+#          Port is not used by the modem driver, but needed by tellishape.
+frame_type=DVB-S2
+#          DVB-S2/S2-EXT/SBC
+feedback_mode=ntFeedback
+listen_address=127.0.0.1:5501
+feedback_unit=bytes

@@ -1,0 +1,89 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+. /etc/parse_modem_netdev.sh
+parse_routercontroller_supported
+
+IPT="/usr/sbin/iptables"
+IPT6="/usr/sbin/ip6tables"
+
+stop_firewall() {
+  #flush all firewall-marked rules (leaving all other rules, created for non-firewall reasons)
+  ${IPT} -S | grep -F "\"${key}" | sed 's/^-A //' | while read rule; do eval "${IPT} -D $rule"; done;
+  ${IPT} -S -t mangle | grep -F "\"${key}" | sed 's/^-A //' | while read rule; do eval "${IPT} -t mangle -D ${rule}"; done;
+  ${IPT} -A INPUT -i lo -j ACCEPT ${keyComment}
+  for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+    ${IPT} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+  done
+
+  IF=eth0
+  ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p icmp -j ACCEPT ${keyComment}
+    # open the iptables for HTTP requests
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 80 -j ACCEPT ${keyComment}
+  fi
+  # open the iptables for DHCP/DNS requests
+  ${IPT} -A INPUT -i ${IF} -p udp --dport 67 -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -i ${IF} -p udp --dport 53 -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -i ${IF} -p tcp --dport 53 -j ACCEPT ${keyComment}
+
+  # Stop forwarding return traffic
+  ${IPT} -A FORWARD -i eth0 -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+
+  # Turn on global accept rules after specific drop rules
+  ${IPT} -P OUTPUT ACCEPT
+  ${IPT} -P FORWARD ACCEPT
+}
+
+stop_firewall6() {
+  IF=eth0
+
+  #flush all firewall-marked rules (leaving all other rules, created for non-firewall reasons)
+  ${IPT6} -S | grep -F "\"${key}" | sed 's/^-A //' | while read rule; do eval "${IPT6} -D $rule"; done;
+  ${IPT6} -S -t mangle | grep -F "\"${key}" | sed 's/^-A //' | while read rule; do eval "${IPT6} -t mangle -D $rule"; done;
+  ${IPT6} -A INPUT -i lo -j ACCEPT ${keyComment}
+  for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+    ${IPT6} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+  done
+  ${IPT6} -A INPUT -i ${IF} -p icmp -j ACCEPT ${keyComment}
+  # open the iptables for HTTP requests
+  ${IPT6} -A INPUT -i ${IF} -p tcp --dport 80 -j ACCEPT ${keyComment}
+  # open the iptables for DHCP/DNS requests
+  ${IPT6} -A INPUT -i ${IF} -p udp --dport 67 -j ACCEPT ${keyComment}
+  ${IPT6} -A INPUT -i ${IF} -p udp --dport 53 -j ACCEPT ${keyComment}
+  ${IPT6} -A INPUT -i ${IF} -p tcp --dport 53 -j ACCEPT ${keyComment}
+
+  # Stop forwarding return traffic
+  ${IPT6} -A FORWARD -i eth0 -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+
+  # Turn on global accept rules after specific drop rules
+  ${IPT6} -P OUTPUT ACCEPT
+  ${IPT6} -P FORWARD ACCEPT
+}
+
+# Main
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    echo "should not be used when addin board is present"
+    exit 0
+fi
+
+if [ $# -lt 1 ]; then
+  echo "usage: stop_firewall <rule key>"
+  echo "        The <rule key> is a unique key identifying the iptables rules that were added to implement firewalling."
+  echo "        This key probably looks something like *IPTKEY:FW*."
+  exit 1
+fi
+
+key=$1
+keyComment="-m comment --comment ${key}"
+
+# Turn on global drop rules before specific accept and drop rules
+/usr/local/bin/set_firewall_input_policy
+stop_firewall
+stop_firewall6
+
+exit 0
+

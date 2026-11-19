@@ -1,0 +1,40 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_tellinet_on_addin_board
+
+create_vlan() {
+  eth_itf_name="eth${itf_nr}"
+  if [ $is_vlan -ne "0" ]; then
+    /sbin/vconfig add ${eth_itf_name} ${vlan_id}
+    # Set link up as soon as possible, mostly to allow link-local IPv6 address to be verified and stop being tentative.
+    ip link set up dev ${eth_itf_name}.${vlan_id}
+  fi
+}
+
+# Main
+
+if [ $# -lt 5 ]; then
+  echo "usage: network <filename> <version>"
+  echo "               <eth itf> <is_vlan> <vlan id>"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+  echo "script skipped because Tellinet is running on the add-in board."
+  exit 0
+fi
+
+itf_nr=$3
+is_vlan=$4
+vlan_id=$5
+
+create_vlan
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

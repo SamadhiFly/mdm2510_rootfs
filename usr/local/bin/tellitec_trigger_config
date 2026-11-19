@@ -1,0 +1,13 @@
+#!/bin/sh
+
+PIDFILE="/var/run/tc-net-client.pid"
+
+trigger_tellitec() {
+  if [ -e ${PIDFILE} ]; then
+    kill -1 `cat ${PIDFILE}`
+  fi
+}
+
+# Main
+trigger_tellitec
+exit 0

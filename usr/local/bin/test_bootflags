@@ -1,0 +1,67 @@
+#!/bin/sh
+#
+# test_bootflags -- check bootflags and derive correct image# and check if it is correct
+# only for M1 modem (MDM3100)
+#
+modemtype=`sed -n "s/^modemtype=\(.*\)/\1/p" /var/state/cfg`
+
+if [ "${modemtype}" -ne 5 ]; then
+	exit 0
+fi
+
+activebuild=`sed -n "s/^activebuild=\(.*\)/\1/p" /var/state/cfg`
+tryothermedium=`cat /proc/cmdline | sed -e "s/ /\n/g"|grep tryotherpersistentmedium|sed -n "s/^tryotherpersistentmedium=\(.*\)/\1/p" `
+tryotherbuild=`cat /proc/cmdline | sed -e "s/ /\n/g" |grep tryotherbuild | sed -n "s/^tryotherbuild=\\(.*\)/\1/p" `
+persistentmedium=`sed -n "s/^activepersistentmedium=\\(.*\)/\1/p" /var/state/cfg`
+image=`sed -n "s/^image=\(.*\)/\1/p" /etc/bootimg`
+
+echo "******************************************************************************"
+echo "Boot test: When booting, the flags were: "
+echo "     activepersistentmedium = ${persistentmedium} "
+echo "     tryotherpersistentmedium = ${tryothermedium} "
+echo "     activebuild = ${activebuild} "
+echo "     tryotherbuild = ${tryotherbuild} "
+
+if [ "${activebuild}" -eq "${tryotherbuild}" ]; then
+	tst1=0
+else
+	tst1=1
+fi
+if [ "${persistentmedium}" -eq "${tryothermedium}" ]; then
+	tst2=0
+else
+	tst2=1
+fi
+suspectedimage=`expr 2 \* ${tst2} + ${tst1}`
+
+echo "  Suspected image = ${suspectedimage} "
+echo "  Booted image = ${image} "
+if [ "${suspectedimage}" -eq "${image}" ]; then
+	echo "Everything seems ok."
+else
+	echo "INCORRECT IMAGE BOOTED!!!"
+fi
+
+echo "------------------------------------------------------------------------------"
+echo "Changing parameters to: "
+activebuild=`expr $RANDOM % 2`
+tryotherbuild=`expr $RANDOM % 2`
+tryothermedium=`expr $RANDOM % 2`
+persistentmedium=`expr $RANDOM % 2`
+echo "     activepersistentmedium = ${persistentmedium} "
+echo "     tryotherpersistentmedium = ${tryothermedium} "
+echo "     activebuild = ${activebuild} "
+echo "     tryotherbuild = ${tryotherbuild} "
+
+sed -i "s/activebuild=[01]/activebuild=${activebuild}/" /var/state/cfg
+sed -i "s/tryotherbuild=[01]/tryotherbuild=${tryotherbuild}/" /var/state/cfg
+sed -i "s/tryotherpersistentmedium=[01]/tryotherpersistentmedium=${tryothermedium}/" /var/state/cfg
+sed -i "s/activepersistentmedium=[01]/activepersistentmedium=${persistentmedium}/" /var/state/cfg
+
+/usr/local/bin/writecfg
+echo "REBOOTING IN 3 SECONDS. Press CTRL-C to abort."
+sync
+sleep 3
+sync
+reboot -f
+

@@ -1,0 +1,75 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+parse_tellinet_on_addin_board
+parse_debugmode
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+  # All main-board network configuration is now statically done in the init_routerboard script.
+  # On top of that, no VRF-specific configuration needs to be done on the main board.
+  return;
+fi
+
+get_netconfig() {
+  ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+  ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    if ! /usr/local/bin/check_eth_subnet "$ethmgmtipaddr" "$ethmgmtnetmask"
+    then
+      fac_ipaddr=`sed -n "s/^fac_ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+      fac_netmask=`sed -n "s/^fac_netmask=\(.*\)$/\1/p" /var/state/cfg`
+      ethmgmtipaddr=${fac_ipaddr:=192.168.1.1}
+      ethmgmtnetmask=${fac_netmask:=255.255.255.0}
+    fi
+  fi
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+  fi
+}
+
+stop_network() {
+  # Stop forwarding and flush everything.
+  /sbin/sysctl -w net.ipv4.conf.all.forwarding=0
+
+  /sbin/sysctl -w net.ipv4.conf.eth0.proxy_arp=0 #TODO does not need to be done when having a whole IPv4 network
+  /sbin/sysctl -w net.ipv4.neigh.eth0.proxy_delay=80 #TODO does not need to be done when having a whole IPv4 network
+
+  /sbin/sysctl -w net.ipv6.conf.all.forwarding=0
+
+  ip -4 addr flush dev eth0
+  ip -6 addr flush dev eth0 scope global
+  ip -6 addr flush dev eth0 scope site
+
+  # Enable local ethernet interface.
+  # if router controller is supported and not in bridged mode, management IP is configured on LAN side of the routercontroller
+  if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+      if [ -n "$ethmgmtipaddr" ]; then
+          ip -4 addr add ${ethmgmtipaddr}/${ethmgmtprefix} dev eth0
+          ip link set eth0 up
+      fi
+  else
+      # hardcoded ip address because this script is called from rc.sh as well
+      # where we would have to hardcode it anyway
+      # SMS-5323
+      # TODO: Move this configuration to init_routerboard script
+      ip -4 addr add 169.254.0.161/27 dev eth0
+      ip link set eth0 up
+  fi
+  
+  #if [ -n "$ethmgmtgatewayip" ]; then
+  #  ip route add default via $ethmgmtgatewayip
+  #fi
+
+ # ip route add default dev modem
+}
+
+# Main
+get_netconfig
+
+stop_network
+
+exit 0

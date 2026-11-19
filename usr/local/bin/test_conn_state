@@ -1,0 +1,19 @@
+#!/bin/sh
+retval=1 #default error
+
+# Verify general state: s3p getstate -> substate should be MODEM_STATE_STARTUP_SYNCHRONIZED or MODEM_STATE_STARTUP_NORMAL_OPER
+
+result=`/usr/local/bin/s3p getstate | grep "general: MODEM_STATE_STARTUP_SYNCHRONIZED" `
+if [  "${result}" != "" ]; then
+	# state is ok
+	retval=0 #success
+else
+    result=`/usr/local/bin/s3p getstate | grep "general: MODEM_STATE_STARTUP_NORMAL_OPER" `
+    if [  "${result}" != "" ]; then
+        # state is ok
+        retval=0 #success
+    fi
+fi
+
+return $retval
+

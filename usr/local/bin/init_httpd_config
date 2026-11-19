@@ -1,0 +1,51 @@
+httpd_conf_templ="/etc/httpd.conf.templ"
+httpd_conf_tmp="/tmp/httpd.conf.tmp"
+httpd_conf_cfg="/etc/httpd.conf"
+
+reverse_proxy_rule='P:$url:$proxy_url'
+
+prepare_default_httpd_conf() {
+  cp $httpd_conf_templ $httpd_conf_tmp
+}
+
+prepare_proxy_rule() {
+  url=$1
+  proxy_url=$2
+  eval "echo $reverse_proxy_rule" >> $httpd_conf_tmp
+}
+
+write_httpd_conf() {
+  cat $httpd_conf_tmp > $httpd_conf_cfg
+  rm $httpd_conf_tmp
+}
+
+restart_inetd() {
+  killall -q -HUP /usr/sbin/inetd
+}
+
+exit_help()
+{
+    echo "Usage: $(basename "$0") [<url> <proxy_url>]"
+    echo "  e.g. : $(basename "$0")"
+    echo "  e.g. : $(basename "$0") \"/tics\" \"http://169.254.0.11/tics\""
+    echo "Calling $(basename "$0") without parameters writes the default httpd.conf."
+    echo "Optionally you can add a reverse proxy rule:"
+    echo "  url        url to be proxied"
+    echo "  proxy_url  url to proxy to"
+    echo
+    exit 1
+}
+
+#Check input parameters
+if [ $# -eq 0 ]; then
+prepare_default_httpd_conf
+write_httpd_conf
+restart_inetd
+elif [ $# -eq 2 ]; then
+prepare_default_httpd_conf
+prepare_proxy_rule $1 $2
+write_httpd_conf
+restart_inetd
+else
+exit_help
+fi

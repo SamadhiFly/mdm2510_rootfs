@@ -1,0 +1,82 @@
+# number of slots per mode (constant obviously)
+slotspermode=2
+
+needs_migration()
+{
+	grep -q -v "selMode=" ${PROC_CMDLINE}
+}
+
+select_bank()
+{
+	local activebuild=$(get_cmdline_var activebuild)
+
+	if needs_migration; then
+		echo $((1-activebuild))
+	else
+		echo ${activebuild}
+	fi
+}
+
+mode_slot_to_str()
+{
+	local mode=$1
+	local slot=$2
+	echo M${mode}S${slot}
+}
+
+mode_slot_to_index()
+{
+	local mode=$1
+	local slot=$2
+	echo $((slotspermode*mode+slot))
+}
+
+calculate_offset_uboot()
+{
+	local mode=$1
+	local slot=$2
+	local index=$(mode_slot_to_index ${mode} ${slot})
+	echo $((index*UBOOT_SLOT_BLOCKSIZE)) 
+}
+
+get_uboot_dev_and_offset()
+{
+	local cs=$1
+	local mode=$2
+	local slot=$3
+	local dev_file=/dev/uboot-$(mode_slot_to_str ${mode} ${slot})
+	if test -e ${dev_file}; then
+		echo ${dev_file}
+	else
+		echo /dev/mtdfpga${cs} $(calculate_offset_uboot ${mode} ${slot})
+	fi
+}
+
+calculate_offset_periph_rbf()
+{
+	local mode=$1
+	local slot=$2
+	local index=$(mode_slot_to_index ${mode} ${slot})
+	echo $((PERIPH_RBF_SLOT_START+index*PERIPH_RBF_SLOT_BLOCKSIZE)) 
+}
+
+get_periph_rbf_dev_and_offset()
+{
+	local cs=$1
+	local mode=$2
+	local slot=$3
+	local dev_file=/dev/periph-$(mode_slot_to_str ${mode} ${slot})
+	if test -e ${dev_file}; then
+		echo ${dev_file}
+	else
+		echo /dev/mtdfpga${cs} $(calculate_offset_periph_rbf ${mode} ${slot})
+	fi
+}
+
+get_sw_dev()
+{
+	local mode=$1
+	local slot=$2
+
+	echo /dev/mmcblk0p$((5+mode*2+slot))
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+certification_status=$1
+sed -i "s#^certificationstatus=.*#certificationstatus=$certification_status#" /var/state/cfg
+/usr/local/bin/writecfg

@@ -1,0 +1,64 @@
+#!/bin/sh
+# This script is invoked by the TelliShape server when the tun interface
+# is created or destroyed.
+# {start|stop} <interface>
+
+# redirect stderror, because this script spawns to many errors during startup
+exec 2>/dev/null
+
+. /etc/parse_modem_netdev.sh
+
+tcs_address=`/usr/local/bin/cliclient GetTmsInformation -g RequestData.Address`
+tellinet_server_address=`/usr/local/bin/cliclient GetLayer3Data -g RequestData.Layer3Data | grep tellitec_server0 | cut -d '=' -f 2 | cut -d ':' -f 1`
+returntech=`/usr/local/bin/s3p getstate |grep "return technology"|head -n 1| cut -d ':' -f 2 `
+mgmt_ip=`/usr/local/bin/cliclient -g RequestData.MgmtIpAddress GetMgmtIpAddress`
+
+#debug info
+#echo "=======tun2_route start=======" >> /tmp/tun2_route
+#/usr/local/bin/cliclient GetTmsInformation 2>&1 >> /tmp/tun2_route
+#/usr/local/bin/cliclient GetLayer3Data -g RequestData.Layer3Data 2>&1 >> /tmp/tun2_route
+
+# There are a number of requirements here, regarding routing through tun2.
+# 1. tun2 (the entrance to Tellishape from the terminal) should be the default route.
+# 2. Messages should be sent from the terminal's management address.
+# 3. Replies (arriving in Netring on the modem interface) should be copied to Linux.
+# All this is done by making tun2 the default route, explicitly specifying the source address in the route through tun2, and placing the
+# management address on the modem interface, to allow Netring to copy the replies to Linux.
+
+case "$1" in
+  start)
+    logger -i -t tc-shape-server -p daemon.info "[PPID: $PPID]: interface $2 is up"
+
+    #Tellishape destination_address address for S2 mode should go to modem device
+    ip -4 route add 169.254.0.1 dev ${modem_netdev_generic_mod}
+
+    ip -6 route delete default
+    ip -6 route add default dev tun2
+
+    #Add a virtual interface for multicast routing to tun2
+    /usr/local/bin/cliclient AddTun2Vif
+
+    #Add route for NTP multicast to modem to ensure NTP multicast socket is opened on modem interface
+    #(otherwise, the FPGA filter isn't set correctly) (SMS-1551)
+    ip -4 route add 224.0.1.1 dev ${modem_netdev_generic_mod}
+    ;;
+  stop)
+    logger -i -t tc-shape-server -p daemon.info "[PPID: $PPID]: interface $2 is down"
+
+    if [ -n "$tellinet_server_address" ]; then
+        logger -t tc-shape-server -p daemon.info "Remove route to tellinet server address "$tellinet_server_address
+        ip -4 route delete $tellinet_server_address
+    fi
+
+    ip -6 route delete default dev tun2
+
+    ip -4 route delete 224.0.1.1 dev ${modem_netdev_generic_mod}
+
+    ;;
+
+esac
+
+#debug info
+#echo "=======tun2_route done========" >> /tmp/tun2_route
+
+exit 0

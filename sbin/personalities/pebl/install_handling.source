@@ -1,0 +1,177 @@
+
+PASSPHRASE=pkNFEj2DUuFtz5pG
+SIGNATURE_SIZE=256
+CERTIFICATE=/mnt/flash/Public_bin.crt
+
+set -e 
+
+trap 'cleanup || true' EXIT
+
+cleanup()
+{
+    test -n "${TMPDIR}" && test -d ${TMPDIR} && rm -rf ${TMPDIR}
+}
+
+
+die() {
+    >&2 echo Error: $@
+    exit 1
+}
+
+create_tempdir()
+{
+    TMPDIR=$(mktemp -d /root/installer.XXXXXX)
+}
+
+get_file_size()
+{
+    stat $1  | grep -oe "Size: [0-9]*" | cut -d' ' -f 2
+}
+
+decrypt_file() {
+    local infile=$1
+    local outfile=$2
+    local passphrase=$3
+
+    openssl aes-256-cbc -pass pass:${passphrase} -md md5 -d -in ${infile} -out ${outfile} || die "Can not decrypt ${filename}"
+}
+
+split_signature() {
+    local decrypted_file=$1
+    local signature_file=$2
+    local signature_size=$3
+    local file_size=$(get_file_size ${decrypted_file})
+
+    tail -c ${signature_size} ${decrypted_file} > ${signature_file} || die "Could not extract signature"
+    2>/dev/null dd if=/dev/null of=${decrypted_file} bs=$((file_size-signature_size)) seek=1 || die "Could not truncate file"
+}
+
+get_certificate()
+{
+    if test -f ${CERTIFICATE}; then
+        echo ${CERTIFICATE}
+    else
+        echo ${EXECDIR}/Public_bin.crt
+    fi
+}
+
+extract_public_key_from_certificate()
+{
+    local certificate=$1
+    local pubkey_file=$2
+    openssl x509 -in "${certificate}" -pubkey -noout > "${pubkey_file}" || die "Could not extrac public key from certificate"
+}
+
+verify_signature()
+{
+    local filename=$1
+    local pubkey_file=$2
+    local signature=$3
+    local algo=$4
+
+    >&2 openssl dgst -${algo} -verify "${pubkey_file}" -signature "${signature}" "$filename" || die "Signature verification failed!" 
+}
+
+decrypt_and_verify()
+{
+    local infile=$1
+    local decrypted_file=$2
+    local signature=${TMPDIR}/signature
+    local pubkey=${TMPDIR}/pubkey
+    local algo=sha${SIGNATURE_SIZE}
+    local certificate=$(get_certificate)
+
+    extract_public_key_from_certificate ${certificate} ${pubkey} || die "Could not acquire pubkey"
+    decrypt_file $infile ${decrypted_file} ${PASSPHRASE} || die "Could not decrypt"
+    split_signature ${decrypted_file} ${signature} ${SIGNATURE_SIZE} || die "Could not split file"
+    verify_signature ${decrypted_file} ${pubkey} ${signature} ${algo} || die "Signature verification failed"
+    chmod +x ${decrypted_file}
+}
+
+extract_capabilities()
+{
+    local decrypted_file=$1
+
+    ${decrypted_file} --extract_capabilities
+    cat /tmp/capabilities.xml
+}
+
+get_product_baselines()
+{    
+    local decrypted_file=$1
+
+    extract_capabilities ${decrypted_file} | sed -n 's/.*ProductBaseLines="\([^\"]*\)".*/\1/p'
+}
+
+get_product_variant()
+{
+    local decrypted_file=$1
+
+    extract_capabilities ${decrypted_file} | sed -n 's/.*ProductVariant="\([^\"]*\)".*/\1/p'
+}
+
+get_product()
+{
+    local decrypted_file=$1
+
+    extract_capabilities ${decrypted_file} | sed -n 's/.*Product="\([^\"]*\)".*/\1/p'
+}
+
+format_version()
+{
+    sed -n 's/.*BuildInfo.*TimeStamp="\([^"]*\)".*Release="\([^"]*\)".*/\2 \1/p'
+}
+
+get_version()
+{
+    local decrypted_file=$1
+
+    extract_capabilities ${decrypted_file} | format_version
+}
+
+check_product()
+{
+    local decrypted_file=$1
+    local product=$2
+
+    compatibility_str=",$(get_product ${decrypted_file}),$(get_product_variant ${decrypted_file}),$(get_product_baselines ${decrypted_file}),"
+    echo ${compatibility_str} | grep -q ",${product}," || die "Incompatible installer"
+}
+
+do_install()
+{
+    local infile=$1
+	local product=$2
+    local decrypted_file=${TMPDIR}/decrypted_file
+
+    decrypt_and_verify ${infile} ${decrypted_file} || die "Could not decrypt and verify"
+    check_product ${decrypted_file} ${product} || die "Incompatible product"
+    ${decrypted_file} || die "Installation failed"
+}
+
+version_info_installer()
+{
+    local infile=$1
+    local decrypted_file=${TMPDIR}/decrypted_file
+
+    >/dev/null 2>/dev/null decrypt_and_verify ${infile} ${decrypted_file} || die "Could not decrypt and verify"
+    echo $(get_product_variant ${decrypted_file}) $(get_version ${decrypted_file}) || die "Could not retrieve version info"
+}
+
+validate_installer()
+{
+    local infile=$1
+    local decrypted_file=${TMPDIR}/decrypted_file
+
+    decrypt_and_verify ${infile} ${decrypted_file} || die "Could not decrypt and verify"
+}
+
+is_compatible_installer()
+{
+    local infile=$1
+    local product=$2
+    local decrypted_file=${TMPDIR}/decrypted_file
+
+    decrypt_and_verify ${infile} ${decrypted_file} || die "Could not decrypt and verify"
+    check_product ${decrypted_file} ${product}
+}

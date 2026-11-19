@@ -1,0 +1,21 @@
+#no-hosts
+
+#NTP server
+dhcp-option=42,%GATEWAY%
+
+# MTU size
+dhcp-option=%INTERFACE%,26,%MTU%
+
+#Other DHCP options
+domain-needed
+no-resolv
+no-poll
+dhcp-authoritative
+#Do not listen on the local loopback. Explicitly excluding lo is necessary, because dnsmasq automatically listens on lo if not told otherwise.
+except-interface=lo
+
+#Static resolving
+address=/www.s3p/%GATEWAY%
+address=/www.modem/%GATEWAY%
+address=/www.s3p/%GATEWAY_IPV6%
+address=/www.modem/%GATEWAY_IPV6%

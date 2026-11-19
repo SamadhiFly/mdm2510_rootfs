@@ -1,0 +1,606 @@
+#!/bin/sh
+
+source /usr/local/bin/ntc_functions
+
+get_json_value()
+{
+        echo $1 | jq -r .$2
+}
+
+split_sr() {
+        tmpsrM=""
+        tmpsrD=""
+        [[ "$1" == "" ]] && return
+        #9090000
+        # assumes non-empty argument
+        len=$(expr length $1)
+        tmpsrM=`expr "$1" / 1000000 `
+        tempD=`expr "$1" - "$tmpsrM" \* 1000000 `
+        lenD=$(expr length $tempD)
+        nrzeros=`expr 6 - "$lenD" `
+        zeros=0000000000
+        tmpsrD=$(expr substr "$zeros" 1 $nrzeros)"$tempD"
+}
+
+read_pt_config() {
+        support_pol=1
+        activebeam=""
+        ptpref="N/A"
+        ptgenmode="N/A"
+        ptfreq="N/A"
+        ptpol="N/A"
+        ptsr="N/A"
+        proporbpos="N/A"
+        propweflag="N/A"
+        proppolskew="N/A"
+        proplatvar="N/A"
+        pt2genmode="N/A"
+        pt2freq="N/A"
+        pt2pol="N/A"
+        pt2sr="N/A"
+        mobgxtfile="N/A"
+        mobbeamname="N/A"
+        mobcost="N/A"
+        mobexclusionzones="N/A"
+        ODU=""
+        if ! is_cliclient_reachable; then return; fi
+        activebeamData=$(/usr/local/bin/cliclient GetActiveBeam)
+        activebeam=$(echo $activebeamData | jq .RequestData.ActiveBeamId)
+        if [ "$activebeam" != "null" ]
+        then
+            beamDataJson=$(/usr/local/bin/cliclient GetBeamData $activebeam)
+            ptpref=$(get_json_value "${beamDataJson}" "RequestData.DefaultPointingCarrier")
+            ptgenmode=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier1.Carrier.TSMode")
+            ptfreq=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier1.Carrier.Freq")
+            ptpol=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier1.Carrier.Polarization")
+            ptsr=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier1.Carrier.SymbolRate")
+            proporbpos=$(get_json_value "${beamDataJson}" "RequestData.OrbitalDegrees")
+            propweflag=$(get_json_value "${beamDataJson}" "RequestData.Hemisphere")
+            proppolskew=$(get_json_value "${beamDataJson}" "RequestData.PolarizationSkew")
+            proplatvar=$(get_json_value "${beamDataJson}" "RequestData.SatLatitudeVariance")
+            pt2genmode=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier2.Carrier.TSMode")
+            pt2freq=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier2.Carrier.Freq")
+            pt2pol=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier2.Carrier.Polarization")
+            pt2sr=$(get_json_value "${beamDataJson}" "RequestData.PointingCarrier2.Carrier.SymbolRate")
+            mobgxtfile=$(get_json_value "${beamDataJson}" "RequestData.GxtFileName")
+            mobbeamname=$(get_json_value "${beamDataJson}" "RequestData.BeamName")
+            mobcost=$(get_json_value "${beamDataJson}" "RequestData.Cost")
+            mobexclusionzones=$(get_json_value "${beamDataJson}" "RequestData.ExclusionZones")
+        fi
+        ODU=$(/usr/local/bin/cliclient GetODUInformation -g RequestData.ODUInformation)
+}
+
+read_cfg() {
+        prod_plant=`grep "prod_plant" /var/state/cfg | sed -n "s/^prod_plant=\(.*\)$/\1/p" `
+        prod_serial=`grep "prod_serial" /var/state/cfg | sed -n "s/^prod_serial=\(.*\)$/\1/p" `
+        prod_date=`grep "prod_date" /var/state/cfg | sed -n "s/^prod_date=\(.*\)$/\1/p" `
+        #hardwareID=`grep "hardwareID" /var/state/cfg | sed -n "s/^hardwareID=\(.*\)$/\1/p" `
+        last_reboot_reason=`grep "reboot_reason_id" /tmp/reboot_reason_info  | sed -n "s/^reboot_reason_id=\(.*\)$/\1/p" `
+        ntcserial=""
+        ntccode=""
+        ntcversion=""
+        ntchwid=""
+        modemtypename=""
+        persistentStorage=""
+        ntcsigvalid=""
+        pkcertvalid=""
+        ethstate=""
+        ethmsg=""
+        wifistate=""
+        wifimsg=""
+        satstate=""
+        satmsg=""
+        swstate=""
+        swmsg=""
+        swdownloadmsg=""
+        demodstate=""
+        demodmsg=""
+        swcurrent=""
+        buildtag=""
+        if ! is_cliclient_reachable; then return; fi
+
+        deviceInfoData=$(/usr/local/bin/cliclient GetDeviceInformation)
+        ntcserial=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.SerialNumber")
+        extserial=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.ExtendedSerialNumber")
+        ntccode=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.IdCode")
+        ntcversion=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.HardwareVersion")
+        ntchwid=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.HardwareId")
+        modemtypename=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.ModemType")
+        persistentStorage=$(get_json_value "${deviceInfoData}" "RequestData.Hardware.PersistentStorage")
+        ntcsigvalid=$(get_json_value "${deviceInfoData}" "RequestData.Authentication.ConfigSignatureValid")
+        pkcertvalid=$(get_json_value "${deviceInfoData}" "RequestData.Authentication.CertificateValid")
+        swcurrent=$(get_json_value "${deviceInfoData}" "RequestData.Software.CurrentVersion")
+
+        devicestatusData=$(/usr/local/bin/cliclient GetDeviceStatus)
+        ethstate=$(get_json_value "${devicestatusData}" "RequestData.Ethernet.State")
+        ethmsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Ethernet.Message)
+        wifistate=$(get_json_value "${devicestatusData}" "RequestData.\"Wi-Fi\".State")
+        wifimsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Wi-Fi.Message)
+        satstate=$(get_json_value "${devicestatusData}" "RequestData.Satellite.State")
+        satmsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Satellite.Message)
+        swstate=$(get_json_value "${devicestatusData}" "RequestData.Software.State")
+        swmsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Software.Message)
+        swdownloadmsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Software.SWDownloadMessage)
+        demodstate=$(get_json_value "${devicestatusData}" "RequestData.Demodulator.State")
+        demodmsg=$(/usr/local/bin/cliclient GetDeviceStatus -f RequestData.Demodulator.Message)
+
+        buildTagData=$(/usr/local/bin/cliclient GetBuildTag)
+        buildtag=$(get_json_value "${buildTagData}" "RequestData.BuildTag")
+}
+
+read_eth_config() {
+        ipaddr=""
+        prefix=""
+        ethaddr=""
+        if ! is_cliclient_reachable; then return; fi
+
+        ethernetInterfaceData=$(/usr/local/bin/cliclient GetEthernetInterfaceData)
+        ipaddr=$(get_json_value "${ethernetInterfaceData}" "RequestData.MgmtAddr.Address")
+        prefix=$(get_json_value "${ethernetInterfaceData}" "RequestData.MgmtAddr.Prefix")
+        ethaddr=$(get_json_value "${ethernetInterfaceData}" "RequestData.MAC")
+}
+
+read_air_config() {
+        support_pol=1
+        airmac=""
+        activebeam=""
+        trppref="N/A"
+        trpgenmode="N/A"
+        trpfreq="N/A"
+        trppol="N/A"
+        trpsr="N/A"
+        trppopid=""
+        trp2genmode="N/A"
+        trp2freq="N/A"
+        trp2pol="N/A"
+        trp2sr="N/A"
+        if ! is_cliclient_reachable; then return; fi
+        airmac=$(/usr/local/bin/cliclient GetAirMACAddress -g RequestData.AirMACAddress)
+        activebeam=$(/usr/local/bin/cliclient GetActiveBeam -g RequestData.BeamId)
+        if [ "$activebeam" != "null" ]
+        then
+            beamData=$(/usr/local/bin/cliclient GetBeamData $activebeam)
+            trppref=$(get_json_value "${beamData}" "RequestData.DefaultInitialCarrier")
+            trpgenmode=$(get_json_value "${beamData}" "RequestData.InitialCarrier1.TSMode")
+            trpfreq=$(get_json_value "${beamData}" "RequestData.InitialCarrier1.Freq")
+            trppol=$(get_json_value "${beamData}" "RequestData.InitialCarrier1.Polarization")
+            trpsr=$(get_json_value "${beamData}" "RequestData.InitialCarrier1.SymbolRate")
+            trp2genmode=$(get_json_value "${beamData}" "RequestData.InitialCarrier2.TSMode")
+            trp2freq=$(get_json_value "${beamData}" "RequestData.InitialCarrier2.Freq")
+            trp2pol=$(get_json_value "${beamData}" "RequestData.InitialCarrier2.Polarization")
+            trp2sr=$(get_json_value "${beamData}" "RequestData.InitialCarrier2.SymbolRate")
+        fi
+        trppopid=$(/usr/local/bin/cliclient GetCarrierSelectionData -g RequestData.PopulationId)
+}
+
+read_multicast_config() {
+        mcmode=`grep "mcmode" /var/state/cfg | sed -n "s/^mcmode=\(.*\)$/\1/p" `
+        mcipaddr0=`grep "mcipaddr0" /var/state/cfg | sed -n "s/^mcipaddr0=\(.*\)$/\1/p" `
+        mcipaddr1=`grep "mcipaddr1" /var/state/cfg | sed -n "s/^mcipaddr1=\(.*\)$/\1/p" `
+        mcipaddr2=`grep "mcipaddr2" /var/state/cfg | sed -n "s/^mcipaddr2=\(.*\)$/\1/p" `
+        mcipaddr3=`grep "mcipaddr3" /var/state/cfg | sed -n "s/^mcipaddr3=\(.*\)$/\1/p" `
+        mcipaddr4=`grep "mcipaddr4" /var/state/cfg | sed -n "s/^mcipaddr4=\(.*\)$/\1/p" `
+        mcipaddr5=`grep "mcipaddr5" /var/state/cfg | sed -n "s/^mcipaddr5=\(.*\)$/\1/p" `
+        mcipaddr6=`grep "mcipaddr6" /var/state/cfg | sed -n "s/^mcipaddr6=\(.*\)$/\1/p" `
+        mcipaddr7=`grep "mcipaddr7" /var/state/cfg | sed -n "s/^mcipaddr7=\(.*\)$/\1/p" `
+        mcipaddr8=`grep "mcipaddr8" /var/state/cfg | sed -n "s/^mcipaddr8=\(.*\)$/\1/p" `
+        mcipaddr9=`grep "mcipaddr9" /var/state/cfg | sed -n "s/^mcipaddr9=\(.*\)$/\1/p" `
+}
+
+read_terminal_capabilities() {
+        if ! is_cliclient_reachable; then return; fi
+        # get all capabilities
+        cmd="/usr/local/bin/cliclient GetCapabilities -g RequestData.Capabilities"
+        capabilities=`${cmd}`
+        # fill report variables
+        aes_256_cap=$(get_json_value "${capabilities}" "Aes256Capable")
+        auto_pointing_cap=$(get_json_value "${capabilities}" "AutomaticPointing")
+        buc_10MHz_cap=$(get_json_value "${capabilities}" "Buc10MHzCapable")
+        buc_50MHz_cap=$(get_json_value "${capabilities}" "Buc50MHzCapable")
+        external_router_controller_cap=$(get_json_value "${capabilities}" "ExternalRouterController")
+        fw_dvbs_cap=$(get_json_value "${capabilities}" "FwDvbs")
+        fw_dvbs2_ccm_cap=$(get_json_value "${capabilities}" "FwDvbs2Ccm")
+        fw_dvbs2x_cap=$(get_json_value "${capabilities}" "FwDvbs2x")
+        fw_dvbs2x_timesliced_cap=$(get_json_value "${capabilities}" "FwDvbs2xTimesliced")
+        install_carrier_pwr_max_cap=$(get_json_value "${capabilities}" "InstallationCarrier.Power.Max")
+        install_carrier_pwr_min_cap=$(get_json_value "${capabilities}" "InstallationCarrier.Power.Min")
+        lnb_10MHz_cap=$(get_json_value "${capabilities}" 'Lnb10MHzCapable')
+        max_fwd_symbol_rate_cap=$(get_json_value "${capabilities}" "MaxForwardSymbolRate")
+        max_nb_of_beams_cap=$(get_json_value "${capabilities}" "MaxNofBeams")
+        mobility_cap=$(get_json_value "${capabilities}" "Mobility")
+        mqtt_client_cap=$(get_json_value "${capabilities}" "MqttClient")
+        ng_max_dma_support_symbol_rate_cap=$(get_json_value "${capabilities}" "NgMxDmaMaxSupportedSymbolRateMBaud")
+        power_config_cap=$(get_json_value "${capabilities}" "PowerConfig")
+        reference_clock_connector_cap=$(get_json_value "${capabilities}" "ReferenceClockConnector")
+        rx_lnb_current_measurement_cap=$(get_json_value "${capabilities}" "RxLnbCurrentMeasurement")
+        segment4_ipsec_supported_cap=$(get_json_value "${capabilities}" "Segment4.IPSec.Supported")
+        segment4_ipv4firewall_localmgmt_cap=$(get_json_value "${capabilities}" "Segment4.IPv4Firewall.LocalMgmt")
+        segment4_ipv4firewall_supported_cap=$(get_json_value "${capabilities}" "Segment4.IPv4Firewall.Supported")
+        segment4_ipv6firewall_localmgmt_cap=$(get_json_value "${capabilities}" "Segment4.IPv6Firewall.LocalMgmt")
+        segment4_ipv6firewall_supported_cap=$(get_json_value "${capabilities}" "Segment4.IPv6Firewall.Supported")
+        segment4_nat_localmgmt_cap=$(get_json_value "${capabilities}" "Segment4.Nat.LocalMgmt")
+        segment4_nat_supported_cap=$(get_json_value "${capabilities}" "Segment4.Nat.Supported")
+        single_coax_cap=$(get_json_value "${capabilities}" "SingleCoax")
+        stoxford_cap=$(get_json_value "${capabilities}" "StOxford")
+        txlnb_current_measurmenet_cap=$(get_json_value "${capabilities}" "TxLnbCurrentMeasurement")
+        wide_band_demod_cap=$(get_json_value "${capabilities}" "WideBandDemod")
+        wifi_supported_cap=$(get_json_value "${capabilities}" "Wifi.Supported")
+}
+
+read_cfg
+read_eth_config
+read_air_config
+read_pt_config
+read_multicast_config
+read_terminal_capabilities
+
+# Main
+echo "" #Put first newline : SMS-474
+echo "========================="
+echo " Terminal identification "
+echo "========================="
+echo "Air MAC address           : ${airmac}"
+echo "Hardware Id               : ${ntchwid}"
+echo "Modem type                : ${modemtypename}"
+echo "Persistent Storage        : ${persistentStorage}"
+echo "Serial number             : ${ntcserial}"
+echo "Extended serial number    : ${extserial}"
+if [ -n "$prod_plant" ]; then
+        echo "Production plant          : ${prod_plant}"
+fi
+if [ -n "$prod_serial" ]; then
+        echo "Production serial         : ${prod_serial}"
+fi
+if [ -n "$prod_date" ]; then
+        echo "Production date           : ${prod_date}"
+fi
+if [ -n "$ntcsigvalid" ]; then
+        echo "sig_verification          : ${ntcsigvalid}"
+fi
+if [ -n "$pkcertvalid" ]; then
+        echo "pkcert                    : ${pkcertvalid}"
+fi
+echo "Uptime                    :`uptime`"
+echo
+echo "================= "
+echo " Terminal Status "
+echo "================= "
+echo "Ethernet Interface State  : $ethstate"
+if [ -n "$ethmsg" ]; then
+        echo "Ethernet Interface Msg    : $ethmsg"
+fi
+
+echo "Wi-Fi Interface State     : $wifistate"
+if [ -n "$wifimsg" ]; then
+        echo "Wi-Fi Interface Msg       : $wifimsg"
+fi
+
+echo "Satellite Interface State : $satstate"
+if [ -n "$satmsg" ]; then
+        echo "Satellite Interface Msg   : $satmsg"
+fi
+echo "Software State            : $swstate"
+if [ -n "$swmsg" ]; then
+        echo "Software Msg              : $swmsg"
+fi
+if [ -n "$swdownloadmsg" ]; then
+        echo "Software Download Msg     : $swdownloadmsg"
+fi
+echo "Software Version          : ${swcurrent}"
+if [ -n "$buildtag" ]; then
+        echo "Software Build Tag        : ${buildtag}"
+fi
+echo "Last Reboot Reason        : ${last_reboot_reason}"
+echo
+
+echo "======================="
+echo " Terminal Configuration"
+echo "======================="
+echo " 1. Ethernet "
+echo
+echo "Eth MAC Address              : ${ethaddr} "
+echo "Management IP Address        : ${ipaddr}  "
+echo "Prefix                       : ${prefix}  "
+echo
+echo " 2. Satellite interface - Satellite properties"
+echo
+echo "Polarization Skew            : $proppolskew"
+echo "Orbital Position             : $proporbpos  ${propweflag}"
+echo "Satellite Latitude Variance  : $proplatvar"
+echo
+echo " 3. Satellite interface - Initial Receive transponders "
+echo
+echo "Preferred transponder        : $trppref"
+echo "TRANSPONDER 1"
+echo "Transport Mode               : $trpgenmode"
+echo "Frequency                    : $trpfreq Hz "
+if [ "$support_pol" = "1" ]; then
+        pol=""
+        if [ "$trppol" = "0" ]; then
+                pol="Horizontal"
+        elif [ "$trppol" = "1" ]; then
+                pol="Vertical"
+        elif [ "$trppol" = "2" ]; then
+                pol="Circular Left"
+        elif [ "$trppol" = "3" ]; then
+                pol="Circular Right"
+        fi
+        echo "Polarization                 : $pol "
+fi
+split_sr "$trpsr"
+trpsrM="$tmpsrM"
+trpsrD="$tmpsrD"
+echo "Symbol Rate                  : ${trpsrM}.${trpsrD} Mbaud "
+
+echo "Population ID                : ${trppopid}"
+echo
+echo "TRANSPONDER 2"
+echo "Transport Mode               : $trp2genmode"
+echo "Frequency                    : $trp2freq Hz "
+if [ "$support_pol" = 1 ]; then
+        pol=""
+        if [ "$trp2pol" = 0 ]; then
+                pol="Horizontal"
+        elif [ "$trp2pol" = 1 ]; then
+                pol="Vertical"
+        elif [ "$trp2pol" = "2" ]; then
+                pol="Circular Left"
+        elif [ "$trp2pol" = "3" ]; then
+                pol="Circular Right"
+        fi
+        echo "Polarization                 : $pol "
+fi
+split_sr "$trp2sr"
+trp2srM="$tmpsrM"
+trp2srD="$tmpsrD"
+echo "Symbol Rate                  : ${trp2srM}.${trp2srD} Mbaud "
+
+echo
+if [ "$have_pointing" = "true" ]; then
+
+        echo " 4. Satellite interface - Pointing Transponders "
+        echo
+        echo "Default transponder          : $ptpref"
+        echo "POINTING TRANSPONDER 1"
+        echo "Transport Mode               : $ptgenmode"
+        echo "Frequency                    : $ptfreq Hz"
+        if [ "$support_pol" = "1" ]; then
+                pol=""
+                if [ "$ptpol" = "0" ]; then
+                        pol="Horizontal"
+                elif [ "$ptpol" = "1" ]; then
+                        pol="Vertical"
+                elif [ "$ptpol" = "2" ]; then
+                    pol="CircularLeft"
+                elif [ "$ptpol" = "3" ]; then
+                    pol="CircularRight"
+                fi
+                echo "Polarization                 : $pol "
+        fi
+        split_sr "$ptsr"
+        ptsrM="$tmpsrM"
+        ptsrD="$tmpsrD"
+        echo "Symbol Rate                  : ${ptsrM}.${ptsrD} Mbaud"
+
+        echo
+        echo "POINTING TRANSPONDER 2"
+        echo "Transport Mode               : $pt2genmode"
+        echo "Frequency                    : $pt2freq Hz"
+        if [ "$support_pol" = "1" ]; then
+                pol=""
+                if [ "$pt2pol" = "0" ]; then
+                        pol="Horizontal"
+                elif [ "$pt2pol" = "1" ]; then
+                        pol="Vertical"
+                elif [ "$pt2pol" = "2" ]; then
+                    pol="Circular Left"
+                elif [ "$pt2pol" = "3" ]; then
+                    pol="Circular Right"
+                fi
+                echo "Polarization                  : $pol "
+        fi
+        split_sr "$pt2sr"
+        pt2srM="$tmpsrM"
+        pt2srD="$tmpsrD"
+        echo "Symbol Rate                  : ${pt2srM}.${pt2srD} Mbaud"
+
+        echo
+fi
+echo " 5. Satellite interface - Mobility data "
+echo
+echo "GXT File                     : $mobgxtfile"
+echo "Beam Name                    : $mobbeamname"
+echo "Cost                         : $mobcost"
+echo "Exclusion zones              : $mobexclusionzones"
+echo
+echo " 6. Multicast mode "
+echo
+case "$mcmode" in
+        0)
+                lmcmode="Disabled"
+        ;;
+        1)
+                lmcmode="Static"
+        ;;
+        2)
+                lmcmode="IGMP Dynamic"
+        ;;
+        *)
+                lmcmode="Disabled"
+        ;;
+esac
+echo "Multicast Mode               : ${lmcmode}"
+if [ "$lmcmode" = "Static" ]; then
+        if [ -n "$mcipaddr0" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr0}"
+        fi
+        if [ -n "$mcipaddr1" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr1}"
+        fi
+        if [ -n "$mcipaddr2" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr2} "
+        fi
+        if [ -n "$mcipaddr3" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr3}"
+        fi
+        if [ -n "$mcipaddr4" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr4} "
+        fi
+        if [ -n "$mcipaddr5" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr5} "
+        fi
+        if [ -n "$mcipaddr6" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr6}"
+        fi
+        if [ -n "$mcipaddr7" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr7} "
+        fi
+        if [ -n "$mcipaddr8" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr8}"
+        fi
+        if [ -n "$mcipaddr9" ]; then
+                echo "Static Multicast IP Addr     : ${mcipaddr9} "
+        fi
+fi
+
+echo
+echo " 7. ODU Information"
+echo
+echo "7.1 ODU "
+ODUDetected=`echo "$ODU" | grep Detected |  cut -d ":" -f 2 | cut -d "," -f 1`
+echo "ODU Detected:               : $ODUDetected"
+if [ "${ODUDetected}" = "true" ]; then
+    ODUSerialNumber=`echo "$ODU" | grep SerialNumber | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUSWVersion=`echo "$ODU" | grep SWVersion | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUHWVersion=`echo "$ODU" | grep HWVersion | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUTxPower=`echo "$ODU" | grep TxPower_dBm | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUTxPolarization=`echo "$ODU" | grep TxPolarization | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODURxPolarization=`echo "$ODU" | grep RxPolarization | cut -d ":" -f 2 | cut -d "," -f 1`
+
+    echo "ODU Serial Number           : $ODUSerialNumber"
+    echo "ODU SW Version              : $ODUSWVersion"
+    echo "ODU HW Version              : $ODUHWVersion"
+    echo "ODU Tx Power                : ${ODUTxPower}dBm"
+    echo "ODU Tx Polarization         : $ODUTxPolarization"
+    echo "ODU Rx Polarization         : $ODURxPolarization"
+
+    #Alarms
+    ODUAlarmCalibration=`echo "$ODU" | grep Calibration | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmReferenceUnlocked=`echo "$ODU" | grep ReferenceUnlocked | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmRxLoUnlocked=`echo "$ODU" | grep RxLoUnlocked | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmRxOverCurrent=`echo "$ODU" | grep RxOverCurrent | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmSelfTest=`echo "$ODU" | grep Selftest | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmTemperature=`echo "$ODU" | grep Temperature | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmTxLoUnlocked=`echo "$ODU" | grep TxLoUnlocked | cut -d ":" -f 2 | cut -d "," -f 1`
+    ODUAlarmTxOverCurrent=`echo "$ODU" | grep TxOverCurrent | cut -d ":" -f 2 | cut -d "," -f 1`
+
+    Alarms=""
+    if [ $ODUAlarmCalibration = true ]; then Alarms="$Alarms Calibration";fi
+    if [ $ODUAlarmReferenceUnlocked = true ]; then Alarms="$Alarms ReferenceUnlocked";fi
+    if [ $ODUAlarmRxLoUnlocked = true ]; then Alarms="$Alarms RxLoUnlocked";fi
+    if [ $ODUAlarmRxOverCurrent = true ]; then Alarms="$Alarms RxOverCurrent";fi
+    if [ $ODUAlarmSelfTest = true ]; then Alarms="$Alarms Selftest";fi
+    if [ $ODUAlarmTemperature = true ]; then Alarms="$Alarms Temperature";fi
+    if [ $ODUAlarmTxLoUnlocked = true ]; then Alarms="$Alarms TxLoUnlocked";fi
+    if [ $ODUAlarmTxOverCurrent = true ]; then Alarms="$Alarms TxOverCurrent";fi
+
+    echo "ODU Active Alarms           : $Alarms"
+fi
+
+echo
+echo " 8. Configuration Information"
+echo
+printConfigInfo()
+{
+    local section="${1}"
+    local subsection="${2}ConfigInfo"
+
+    if ! is_cliclient_reachable
+    then
+        printf "N/A\n"
+        return
+    fi
+
+    local config="$(/usr/local/bin/cliclient GetModemConfigState -g RequestData.${section})"
+    if [[ "${config}" == "" ]]
+    then
+        printf "N/A\n"
+        return
+    fi
+    
+    local subconfig="$(/usr/local/bin/cliclient GetModemConfigState -g RequestData.${section}.${subsection})"
+    if [[ "${subconfig}" == "" ]]
+    then
+        printf "N/A\n"
+        return
+    fi
+
+    subconfig="$(remove_newlines "${subconfig}")"
+
+    if [[ "$(echo ${subconfig} | sed 's/[{ }]//g')" == "" ]]
+    then
+        printf "N/A\n"
+        return
+    fi
+
+    printf "Id="
+    id="$(json_get_value "${subconfig}" "Id")"
+    [[ -z "$id" || "${id}" == "null" ]] && printf "N/A" || printf "${id}"
+
+    printf "; LastUpdated="
+    lastupdate="$(json_get_value "${subconfig}" "SecondsSinceLastUpdate")"
+    if [[ "${lastupdate}" == "" || "${lastupdate}" == "null" || "$(is_number "${lastupdate}")" != "0" ]]
+    then
+        printf "N/A\n"
+        return
+    fi
+    local exitcode="0"
+    lastupdateTime="$(($(date +%s) - $lastupdate))"
+    exitcode="$?"
+    [[ "${exitcode}" != "0" ]] && printf "N/A\n" || printf "$(date -d @"${lastupdateTime}")\n"
+    return
+}
+echo "Current configuration"
+        echo -n "Satellite                    :" && printConfigInfo "Config" "Satellite"
+        echo -n "Miscellaneous                :" && printConfigInfo "Config" "Miscellaneous"
+echo
+echo "Candidate configuration"
+        echo -n "Satellite                    :" && printConfigInfo "CandidateConfig" "Satellite"
+        echo -n "Miscellaneous                :" && printConfigInfo "CandidateConfig" "Miscellaneous"
+echo
+echo "======================="
+echo " Terminal Capabilities"
+echo "======================="
+echo "AES256                        : ${aes_256_cap} "
+echo "Auto Pointing                 : ${auto_pointing_cap} "
+echo "BUC 10Mhz                     : ${buc_10MHz_cap} "
+echo "BUC 50Mhz                     : ${buc_50MHz_cap} "
+echo "External Router Controller    : ${external_router_controller_cap} "
+echo "FW Dvbs                       : ${fw_dvbs_cap} "
+echo "FW Dvbs2 Ccm                  : ${fw_dvbs2_ccm_cap} "
+echo "FW Dvbs2x                     : ${fw_dvbs2x_cap} "
+echo "FW Dvbs2x Timesliced          : ${fw_dvbs2x_timesliced_cap} "
+echo "Power Max                     : ${install_carrier_pwr_max_cap} "
+echo "Power Min                     : ${install_carrier_pwr_min_cap} "
+echo "Lnb 10MHz Capable             : ${lnb_10MHz_cap} "
+echo "Max Forward SymbolRate        : ${max_fwd_symbol_rate_cap} "
+echo "Max Nb of Beams               : ${max_nb_of_beams_cap} "
+echo "Mobility                      : ${mobility_cap} "
+echo "Mqtt Client                   : ${mqtt_client_cap} "
+echo "NgMxDmsMaxSupportedSymbolRate : ${ng_max_dma_support_symbol_rate_cap} "
+echo "Power Configuration           : ${power_config_cap} "
+echo "Reference Clock Connector     : ${reference_clock_connector_cap} "
+echo "Rx Lnb Current Measurement    : ${rx_lnb_current_measurement_cap} "
+echo "IPSec Supported               : ${segment4_ipsec_supported_cap} "
+echo "IPv4 Firewall Local Mgmt      : ${segment4_ipv4firewall_localmgmt_cap} "
+echo "IPv4 Firewall Supported       : ${segment4_ipv4firewall_supported_cap} "
+echo "IPv6 Firewall Local Mgmt      : ${segment4_ipv6firewall_localmgmt_cap} "
+echo "IPv6 Firewall Supported       : ${segment4_ipv6firewall_supported_cap} "
+echo "Nat Local Mgmt                : ${segment4_nat_localmgmt_cap} "
+echo "Nat Supported                 : ${segment4_nat_supported_cap} "
+echo "Single Coax                   : ${single_coax_cap} "
+echo "ST Oxford                     : ${stoxford_cap} "
+echo "Tx Lnb Current Measurement    : ${txlnb_current_measurmenet_cap} "
+echo "WideBand Demod                : ${wide_band_demod_cap} "
+echo "Wifi Supported                : ${wifi_supported_cap} "
+

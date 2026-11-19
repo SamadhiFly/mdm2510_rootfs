@@ -1,0 +1,23 @@
+#!/bin/sh
+retval=1 #default error
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+#test whether the arp file contains anything for the eth0 interface
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    arp_cache_elements=`/usr/local/bin/cliclient RouterControllerGetLANTestResult -g RequestData.ArpCacheElements`
+else
+    arp_cache_elements=`sed -n "/eth0/p" /proc/net/arp | wc -l`
+fi
+if [ "${arp_cache_elements}" -ge 1 ]
+then
+	echo "arp cache is not empty" >> /var/state/test_fail_eth
+	retval=0 #success
+else
+	echo "arp cache is empty" >> /var/state/test_fail_eth
+fi
+
+return $retval
+

@@ -1,0 +1,112 @@
+#!/bin/sh
+
+create_loglevel_pattern() {
+    if [ "$logfilter" = 9 ] || [ -z $logfilter ]; then
+        loglevels_pattern="[a-z]*"
+    else
+        loglevels_pattern="EMERG"
+        if [ "$logfilter" -gt 1 ]; then
+                loglevels_pattern="$loglevels_pattern|ALERT"
+        fi
+        if [ "$logfilter" -gt 2 ]; then
+                loglevels_pattern="$loglevels_pattern|CRIT"
+        fi
+        if [ "$logfilter" -gt 3 ]; then
+                loglevels_pattern="$loglevels_pattern|ERR"
+        fi
+        if [ "$logfilter" -gt 4 ]; then
+                loglevels_pattern="$loglevels_pattern|WARN"
+        fi
+        if [ "$logfilter" -gt 5 ]; then
+                loglevels_pattern="$loglevels_pattern|NOTICE"
+        fi
+        if [ "$logfilter" -gt 6 ]; then
+                loglevels_pattern="$loglevels_pattern|INFO"
+        fi
+        if [ "$logfilter" -gt 7 ]; then
+                loglevels_pattern="$loglevels_pattern|DEBUG"
+        fi
+    fi
+}
+
+build_pipe_stages() {
+    if [ "$REQUEST_METHOD" = "POST" ]; then
+        if ! read -r request; then
+                QUERY_STRING="$request"
+        fi
+    fi
+
+    # ---- Set stage A: pick last lines starting from $logLineNumber
+    logLineNumber=$(expr match "$QUERY_STRING" '.*logline=\([0-9]*\)')
+    if [ -z "$logLineNumber" ] || [ "$logLineNumber" -eq 0 ]; then
+        # No-op
+        startFromLine="tee"
+        if ls /tmp/logfiles/main_board.log.* 1> /dev/null 2>&1; then
+          outputUnprocessedPrev=$(ls -1t /tmp/logfiles/main_board.log.* | head -1 | xargs unzip -p | awk '{print NR " " $s}')
+        fi
+    else
+        nextLogLine=$((logLineNumber+1))
+        fileLines=$(wc -l /tmp/logfiles/main_board.log | awk '{print $1;}')
+        if [ "$fileLines" -lt "$logLineNumber" ]; then
+          startFromLine="tee"
+        else
+          startFromLine="tail -n +$nextLogLine"
+        fi
+    fi
+
+    # ---- Set stage B: filter according to $logfilter and $datafilter
+    logfilter=$(expr match "$QUERY_STRING" '.*filter=\([0-9]*\)')
+    create_loglevel_pattern
+    datafilter=$(expr match "$QUERY_STRING" '.*datafilt=\([0-9a-zA-Z]*\)')
+    ident="[^ ]*"
+    applyFilter="egrep \"^[0-9]*[^ ]* \[(${loglevels_pattern})[^ ]* ([a-zA-Z]{3} [ 0-9]* [0-9]{2}:[0-9]{2}:[0-9]{2}) (${datafilter})${ident}\""
+
+    # ---- Set stage C: keep only most recent $buffer lines
+    buffer=$(expr match "$QUERY_STRING" '.*last=\([0-9]*\)')
+    if [ -z "$buffer" ] || [ "$buffer" -eq 0 ]; then
+        # No-op
+        pickLast="tee"
+    else
+        pickLast="tail -n $buffer"
+    fi
+
+    # ---- Set stage D: reverse if needed
+    showmode=$(expr match "$QUERY_STRING" '.*showmode=\([0-9]*\)')
+    if [ "$showmode" -eq 2 ]; then
+        # Do revert with sed (tac not available)
+        maybeRevert="sed -n '1!G;h;\$p'"
+    else
+        # No-op
+        maybeRevert="tee"
+    fi
+}
+
+build_pipe_stages
+
+# logread -> append line numbers -> stage A -> stage B -> stage C -> stage D
+outputUnprocessedCur=$(cat /tmp/logfiles/main_board.log | awk '{print NR " " $s}')
+outputUnprocessed="${outputUnprocessedPrev}${outputUnprocessedCur}"
+outputWithLineNumbers=$(echo "$outputUnprocessed" | eval $startFromLine | eval $applyFilter | eval $pickLast | eval $maybeRevert)
+
+# Get last line number
+if [ ! -z "$outputWithLineNumbers" ]; then
+    if [ "$showmode" -eq 2 ]; then
+        lastLine=$(echo "$outputWithLineNumbers" | head -n 1)
+    else
+        lastLine=$(echo "$outputWithLineNumbers" | tail -n 1)
+    fi
+    lastLineNumber=$(expr match "$lastLine" '\([0-9]*\)*')
+else
+    lastLineNumber=-1 # -1 indicates no matched content
+fi
+
+# Return response in stdout
+echo "Content-type: text/plain"
+echo "Content-Encoding: gzip"
+echo ""
+{
+    echo "$lastLineNumber"
+    echo "$outputWithLineNumbers" | awk '{$1=""; print}' # remove line numbers
+} | gzip
+
+exit 0

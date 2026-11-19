@@ -1,0 +1,29 @@
+#!/bin/sh
+#set -e -x
+
+PIDFILE="/var/run/tc-net-client.pid"
+WORKING_DIR="/tmp/tellitec"
+
+start_tellitec() {
+  cd "$WORKING_DIR"
+  /usr/local/bin/tc-net-client -c /etc/net-client.ini &
+  echo $! > ${PIDFILE}
+}
+
+# Main
+if [ $# -lt 2 ]; then
+  echo "usage: tellitec <filename> <version>"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+#debug
+echo "Version: $version"
+
+start_tellitec
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

@@ -1,0 +1,42 @@
+#!/bin/sh   
+
+retval=1 #default fail
+
+rm -f /var/state/test_*_ping #remove output/fail files of previous runs of this test
+
+echo "test_traffic_ping: running" >> /var/state/test_report
+
+if [ $# != 4 ]; then
+    sed "s/test_traffic_ping: running/test_traffic_ping: not enough parameters/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+    return $retval
+fi
+
+state=$3
+
+if [ $state="OperationalModemState" ]; then
+    ipaddress=$4
+
+    if [ -n "$ipaddress" ]; then
+        /usr/local/bin/test_ping "${ipaddress}" "$1" "$2"
+        retval=$?
+        if [ "$retval" = 0 ]
+        then
+            sed "s/test_traffic_ping: running/test_traffic_ping: ok/" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+        else
+            sed "s/test_traffic_ping: running/test_traffic_ping: nok/" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+        fi
+    else
+        echo "Ping ip address not configured" >> /var/state/test_fail_ping
+        sed "s/test_traffic_ping: running/test_traffic_ping: not configured/" </var/state/test_report >/var/state/test_report_n
+        mv /var/state/test_report_n /var/state/test_report
+    fi
+else
+    echo "Modem is not operational" >> /var/state/test_fail_ping
+    sed "s/test_traffic_ping: running/test_traffic_ping: not operational/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+fi
+
+return $retval

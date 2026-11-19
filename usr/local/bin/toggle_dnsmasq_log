@@ -1,0 +1,7 @@
+#!/bin/sh
+if [ ! -e "/var/run/dnsmasq.pid" ]; then
+  echo "Daemon is not running!"
+  exit 0
+fi
+
+kill -USR2 `cat /var/run/dnsmasq.pid`

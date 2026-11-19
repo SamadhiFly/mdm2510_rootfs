@@ -1,0 +1,8 @@
+name=check_kernel_drivers
+type=program
+program=/usr/local/bin/check_kernel_drivers.sh
+timeout=%WDTIMEOUTSHORT%
+cron="%MINUTES% * * * *"
+retries=%WDRETRIES% 
+cycle=%WDCYCLE%
+onfailure="/usr/local/bin/log2flashandreboot.sh drivers"

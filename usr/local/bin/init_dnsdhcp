@@ -1,0 +1,176 @@
+#!/bin/sh
+#set -e -x
+# Initial config script. This sets an Ethernet-only configuration, serves
+# a single DHCP address and replies to all DNS queries with its own address.
+# This should force the web browser on a PC behind an unconfigured access box
+# to the configuration in the web interface, presumably to configure the
+# initial transponder.
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+get_netconfig() {
+  # if router controller is supported and not in bridged mode, use hard-coded localmgmt addresses
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    . /usr/local/bin/ifcfg_local_mgmt.sh
+    ethmgmtipaddr=${LM_IPADDR}
+    ethmgmtnetmask=${LM_NETMASK}
+  else # no router controller
+    ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+    ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+    if [ -n "$ethmgmtipaddr" ]; then
+      if ! /usr/local/bin/check_eth_subnet "$ethmgmtipaddr" "$ethmgmtnetmask"
+      then
+        fac_ipaddr=`sed -n "s/^fac_ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+        fac_netmask=`sed -n "s/^fac_netmask=\(.*\)$/\1/p" /var/state/cfg`
+        ethmgmtipaddr=${fac_ipaddr:=192.168.1.1}
+        ethmgmtnetmask=${fac_netmask:=255.255.255.0}
+      fi
+    fi
+
+  fi
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+    ethnetwork=`ipcalc -sn ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+    ethbroadcast=`ipcalc -sb ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/BROADCAST=\(.*\)/\1/p"`
+  fi
+  
+  dhcp_enabled=`sed -n 's/^dhcp_enabled=\([01]\)/\1/p' /var/state/cfg`
+}
+
+dnsmasq_conf_cfg="/etc/dnsmasq/dnsmasq.conf"
+
+write_dnsmasq_conf() {
+  dnsmasq_conf_tmpl="/etc/dnsmasq.conf.templ"
+  dnsmasq_conf_tmp="/tmp/dnsmasq.conf.tmp"
+  cp $dnsmasq_conf_tmpl $dnsmasq_conf_tmp
+  sed -i "s/%GATEWAY%/${ethmgmtipaddr}/" $dnsmasq_conf_tmp
+  sed -i "s/,%GATEWAY_IPV6%//" $dnsmasq_conf_tmp
+  sed -i "s/^address=.*%GATEWAY_IPV6%/# no IPv6/" $dnsmasq_conf_tmp
+  # when the routerboard is present, we should never do dhcp at startup
+  # a statically configured subnet is present for local mgmt
+  if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+	  echo "dhcp-range=${useripaddr},${useripaddr2},2m" >> $dnsmasq_conf_tmp
+  fi
+
+  echo "address=/#/${ethmgmtipaddr}" >> $dnsmasq_conf_tmp
+  
+  # If dhcp was disabled by the hub, then this will be stored in flash config
+  # If the stored value does not exist we assume that dhcp is enabled
+  # Note that the (expert) user can also change this value
+  if [ "${dhcp_enabled}" = "0" ]
+  then
+    echo "no-dhcp-interface=eth0" >> $dnsmasq_conf_tmp
+  fi
+
+  # when the routerboard is present, we should never do dhcp at startup
+  # a statically configured subnet is present for local mgmt
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+      echo "no-dhcp-interface=eth0" >> $dnsmasq_conf_tmp
+  fi
+
+  # re-add tftp support 
+  tftpserver=`sed -n "s/^tftpserver=\(.*\)$/\1/p" /var/state/cfg`
+  tftpfile=`sed -n "s/^tftpfile=\(.*\)$/\1/p" /var/state/cfg`
+  if [ -n "${tftpserver}" ]; then
+    echo "dhcp-option=66,${tftpserver}" >> $dnsmasq_conf_tmp
+                        
+    if [ -n "${tftpfile}" ]; then
+      echo "dhcp-boot=${tftpfile},${tftpserver},${tftpserver}" >> $dnsmasq_conf_tmp
+    fi
+  fi
+
+  #Binding options
+  echo "interface=lo" >> $dnsmasq_conf_tmp
+  echo "interface=eth0" >> $dnsmasq_conf_tmp
+  echo "bind-dynamic" >> $dnsmasq_conf_tmp
+
+  echo "dhcp-leasefile=/var/state/dnsmasq.leases" >> $dnsmasq_conf_tmp
+ 
+  cat $dnsmasq_conf_tmp > $dnsmasq_conf_cfg
+  rm $dnsmasq_conf_tmp
+}
+
+stop_dnsmasq() {
+  if [ -e "/var/run/dnsmasq.pid" ]; then
+    kill `cat /var/run/dnsmasq.pid`
+    sleep 1 #it takes a bit to really die
+    rm -f /var/run/dnsmasq.pid
+    rm -f /var/state/dnsmasq.leases
+  fi
+}
+
+start_dnsmasq() {
+  if [ $quiet -eq "1" ]; then
+    quiet_param="--quiet-dhcp"
+  else
+    quiet_param=""
+  fi
+  /usr/sbin/dnsmasq $quiet_param --conf-file=$dnsmasq_conf_cfg
+}
+
+write_hosts() {
+  hoststmpl="/etc/hosts.templ"
+  hoststmp="/tmp/hosts.tmp"
+  hostscfg="/etc/hosts"
+  etc_hostname=`cat /etc/hostname`
+  cp $hoststmpl $hoststmp
+  echo "${ethmgmtipaddr} modem" >> $hoststmp
+  echo "${ethmgmtipaddr} ${etc_hostname}" >> $hoststmp
+  cat $hoststmp > $hostscfg
+  rm $hoststmp
+}
+
+find_useripaddr() {
+  net=$(expr match "$ethnetwork" "\(.*\..*\..*\.\).*")
+  addr=$(expr match "$ethnetwork" ".*\..*\..*\.\(.*\)")
+  let "addr += 1"
+  i=0
+  while [ "${net}${addr}" != "$ethbroadcast" -a $addr -lt 256 ]; do
+    if [ "${net}${addr}" != $ethmgmtipaddr ]; then
+      #we want four addresses
+      if [ "$i" = 0 ]; then
+        useripaddr="${net}${addr}" #first free address
+        useripaddr2="${net}${addr}" #in case the check breaks
+        let "i += 1"
+      elif [ "$i" = 3 ]; then
+        useripaddr2="${net}${addr}" #fourth free address
+        break
+      else
+        useripaddr2="${net}${addr}" #in case the checks breaks
+        let "i += 1"
+      fi
+    else
+      i=0 #mismatch: reset the counter
+    fi
+    let "addr += 1"
+  done
+}
+
+quiet="0"
+reWriteHosts=1
+if [ $# -ge 1 ]; then
+  quiet=$1
+if [ $# -ge 2 ]; then
+  reWriteHosts=$2
+fi # $# -ge 2
+fi # $# -ge 1
+
+
+# Main code
+get_netconfig
+stop_dnsmasq
+find_useripaddr
+if [ $reWriteHosts = 1 ]; then
+  write_hosts
+fi
+
+# do not change location: SMS-5409, tellishape needs write_hosts
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    logger -t $0 -p daemon.debug "$filename: router controller is supported, setting the dnsmasq configuration is not needed." 
+    exit 0
+fi
+
+write_dnsmasq_conf
+start_dnsmasq

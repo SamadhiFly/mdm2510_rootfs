@@ -1,0 +1,114 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+IPT="/usr/sbin/iptables"
+IP6T="/usr/sbin/ip6tables"
+
+start_firewall() {
+  # configure filtering and start routing
+  #  default policy: accept nothing incoming, everything outgoing
+
+  #Note: in theory, we should/could add an ACCEPT  rule to the PREROUTING chain of the mangle table, each time we add a rule to the INPUT chain.
+  #However, the PREROUTING's policy is ACCEPT and is never changed, so there is really no reason, unless there is a DROP or mark rule we
+  #need to avoid by having an ACCEPT earlier. As a result, we do not add ACCEPT rules to the PREROUTING table. for the eth interfaces.
+
+  #  allow icmp, tcp/dns, udp/dns, udp/dhcp, udp/ntp from allowed hosts on the vlan
+  #  forward everything else from and to the client pc.
+  ${IPT} -A INPUT -i ${interface} -p udp --dport 67 -j ACCEPT ${keyComment}
+  if [ $ipv6_enable ]; then
+    ${IP6T} -A INPUT -i ${interface} -p udp --dport 547 -j ACCEPT ${keyComment}
+  fi
+
+  ${IPT} -A INPUT -i ${interface} -d $gateway -p icmp -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -i ${interface} -d $gateway -p udp --dport 53 -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -i ${interface} -d $gateway -p tcp --dport 53 -j ACCEPT ${keyComment}
+
+  # TODO for NTP should always be INPUT? for multicast ?
+  ${IPT} -A INPUT -i ${interface} -d $gateway -p udp --dport 123 -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -i ${interface} -m pkttype --pkt-type multicast -j ACCEPT ${keyComment}
+
+  if [ $ipv6_enable ]; then
+    # for  IPv6, we cannot enumerate all the addresses, but use the whole subnet
+    ${IP6T} -A INPUT -i ${interface} -p icmpv6 -j ACCEPT ${keyComment} #Do not just accept packets with destination $ipv6_gateway, because neighbor discovery will also use the link-local address.
+    ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p udp --dport 53 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p tcp --dport 53 -j ACCEPT ${keyComment}
+
+    ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p udp --dport 123 -j ACCEPT ${keyComment}
+    # no management ip address for IPv6!
+  fi
+
+  #also accept all traffic to the tun interface associated with the VLAN (used for DNS responses from the upstream DNS server, and reply to our http request (and tcp syns), used for the http selftest)
+  ${IP6T} -A INPUT -i ${tun_interface} -j ACCEPT ${keyComment}
+
+  #communication Tellicast-Tellishape
+  if [ "$external_tellishape_feedback" = 1 ]; then
+    ${IPT} -A INPUT -i ${interface} -d $gateway -p tcp --dport 10250 -j ACCEPT ${keyComment}
+    if [ $ipv6_enable ]; then
+      ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p tcp --dport 10250 -j ACCEPT ${keyComment}
+    fi
+  fi
+
+  # If management traffic is allowed, allow http for terminal GUI
+  if [ $allow_mgmt -gt 0 ]; then
+    ${IPT} -A INPUT -i ${interface} -d $gateway -p tcp --dport 80 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${interface} -d $gateway -p tcp --dport 8000 -j ACCEPT ${keyComment} #Tellinet GUI
+    ${IPT} -A INPUT -i ${interface} -d $gateway -p tcp --dport 11200 -j ACCEPT ${keyComment} #Tellishape GUI
+    if [ $ipv6_enable ]; then
+      ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p tcp --dport 80 -j ACCEPT ${keyComment}
+      ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p tcp --dport 8000 -j ACCEPT ${keyComment} #Tellinet GUI
+      ${IP6T} -A INPUT -i ${interface} -d $ipv6_gateway -p tcp --dport 11200 -j ACCEPT ${keyComment} #Tellishape GUI
+    fi
+  fi
+}
+
+# Main
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    echo "should not be used when addin board is present"
+    exit 0
+fi
+
+if [ $# -lt 10 ]; then
+  echo "usage: firewall_add_vlan <filename> <version> <interface> <tun_interface> <external tellishape feedback>"
+  echo "                         <gateway>"
+  echo "                         <ipv6 enable> <ipv6 gateway>"
+  echo "                         <allow management traffic>"
+  echo "                         <rule key>"
+  echo "        The <rule key> is a unique key identifying the iptables rules that were added to implement firewalling."
+  echo "        This key probably looks something like *IPTKEY:FW*."
+  exit 1
+fi
+
+filename=${1}
+version=${2}
+interface=${3}
+tun_interface=${4}
+external_tellishape_feedback=${5}
+gateway=${6}
+ipv6_enable=${7}
+ipv6_gateway=${8}
+allow_mgmt=${9}
+key=${10}
+keyComment="-m comment --comment ${key}"
+
+
+#DEBUG output
+echo "Gateway address: $gateway"
+if [ $ipv6_enable ]; then
+    echo "IPv6 Gateway: $ipv6_gateway"
+fi
+
+echo -n "Support external tellishape feedback: "
+if [ "$external_tellishape_feedback" = 1 ]; then
+  echo "yes"
+else
+  echo "no"
+fi
+
+start_firewall
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

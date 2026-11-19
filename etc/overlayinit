@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# /etc/overlayinit
+#
+
+echo "overlayinit: mount overlayfs over tmpfs (upper) and squashfs (lower)..."
+
+mount -t tmpfs -o mode=1777,uid=0,gid=0 none /.overlay
+
+mkdir /.overlay/upper
+mkdir /.overlay/merged
+mount -t overlayfs -o lowerdir=/,upperdir=/.overlay/upper none /.overlay/merged
+
+echo "overlayinit: pivot root towards overlayfs..."
+
+mount --bind /dev /.overlay/merged/dev
+
+mkdir /.overlay/merged/.oldroot
+pivot_root /.overlay/merged /.overlay/merged/.oldroot
+
+echo "overlayinit: done"

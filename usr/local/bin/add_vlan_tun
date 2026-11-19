@@ -1,0 +1,54 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+create_vlan_tun() {
+  eth_itf_name="eth${itf_nr}"
+  if [ $is_vlan -eq "0" ]; then
+    tun_itf_name="tunvl${itf_nr}"
+  else
+    tun_itf_name="tunvl${itf_nr}_${vlan_id}"
+  fi
+
+  # Create tun interface for vlan, used to set tunnel addresses
+  /usr/local/sbin/tunctl -n -t ${tun_itf_name}
+
+  # Make sure the tun device is up, otherwise ip route add will fail.
+  /sbin/ip link set up dev ${tun_itf_name}
+
+  # Add routing tables, to route internal traffic (e.g. upstream DNS requests) associated with this vlan to the tun interface.
+  # The associated routing rules will be added later, when configuring the interface.
+  /sbin/ip rule add fwmark ${table} table ${table}
+  /sbin/ip -6 rule add fwmark ${table} table ${table}
+}
+
+# Main
+if [ $# -lt 6 ]; then
+  echo "usage: network <filename> <version>"
+  echo "               <eth itf> <is_vlan> <vlan id>"
+  echo "               <routing table>"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+itf_nr=$3
+is_vlan=$4
+vlan_id=$5
+
+table=$6
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    # ip6 termination has moved to router board
+    echo "script skipped because routercontroller is supported"
+    exit 0
+fi
+
+create_vlan_tun
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

@@ -1,0 +1,26 @@
+#!/bin/sh
+tmpfile="/tmp/tmp..$$"
+tmpfile2="/tmp/tmp2..$$"
+
+# this file is executed three minutes after the rc.sh start script
+
+# 1. remove the cron job that launched this script
+crontab -l > $tmpfile
+grep -v "/usr/local/bin/init_dhcp" $tmpfile > $tmpfile2
+crontab $tmpfile2
+
+# 2. test whether dnsmasq is not running
+ps > $tmpfile
+result=`sed -n "/.*dnsmasq.*/p" $tmpfile`
+if [ -z "$result" ]; then
+	# no dnsmasq running
+	# 3. test whether status is not green
+	s3p getstate > $tmpfile
+	result=`grep summary_state tmp | sed -n "s/summary_state: \(.*\)/\1/p"`
+	if [ "$result" != "GREEN" ]; then
+		# 4. if both tests are ok: launch /bin/init_dnsdhcp script
+		/usr/local/bin/init_dnsdhcp
+	fi
+fi
+
+rm $tmpfile $tmpfile2

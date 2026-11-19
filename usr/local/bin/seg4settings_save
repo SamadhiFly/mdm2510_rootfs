@@ -1,0 +1,37 @@
+#!/bin/sh
+
+# the idea is that before we write the new settings file to flash
+# we check whether there's a difference between old and new
+# this is actually a hack as we should now whether it is needed or not
+
+if [ $# -ne 2 ]; then
+echo "usage: $0 <tmpfile> <finalfile>"
+    exit 1
+fi
+
+TMP_FILE=$1
+FINAL_FILE=$2
+
+if [ ! -f "$TMP_FILE" ]; then
+    logger -t $0 -p daemon.error "could not save: '$TMP_FILE' not found"
+    exit 1
+fi
+
+MD5SUM=/usr/bin/md5sum
+if [ ! -f "$MD5SUM" ]; then
+    logger -t $0 -p daemon.warning "'md5sum' executable not found"
+    mv $TMP_FILE $FINAL_FILE
+    exit $?
+fi
+
+MD1=`md5sum $TMP_FILE | cut -d \  -f1`
+MD2=`md5sum $FINAL_FILE | cut -d \  -f1`
+if [ "$MD1" != "$MD2" ]; then
+    mv $TMP_FILE $FINAL_FILE
+    exit $?
+else
+    rm $TMP_FILE
+    logger -t $0 -p daemon.info "no need to overwrite"
+fi
+
+exit 0

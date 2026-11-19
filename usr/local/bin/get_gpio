@@ -1,0 +1,3 @@
+#!/bin/sh
+dd if=/dev/modem_gpio bs=9 count=1 2>/dev/null
+echo

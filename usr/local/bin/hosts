@@ -1,0 +1,66 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+write_hosts() {
+  # Tellitec does not start if it cannot resolve the hostname in /etc/hosts.
+  tmpl="/etc/hosts.templ"
+  tmp="/tmp/hosts.tmp"
+  cfg="/etc/hosts"
+  etc_hostname=`cat /etc/hostname`
+  cp $tmpl $tmp
+  echo "${modemipaddr} ${name} modem" >> $tmp
+  echo "${ethmgmtipaddr} ${etc_hostname}" >> $tmp
+  cat $tmp > $cfg
+  rm $tmp
+  actual=`hostname`
+  if [ "$actual" != "$name" ]; then
+    hostname "$name"
+  fi
+}
+
+get_netconfig() {
+  modemipaddr=`sed -n "s/^modemipaddr=\(.*\)$/\1/p" /var/state/cfg`
+
+  # if router controller is supported and not in bridged mode, use eth0_ipaddr and eth0_netmask instead of ipaddr and netmask
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    . /usr/local/bin/ifcfg_local_mgmt.sh
+    ethmgmtipaddr=${LM_IPADDR}
+    ethmgmtnetmask=${LM_NETMASK}
+  else # no router controller
+    ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+    ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+  fi
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+    ethipaddr=`ip addr show dev eth0 | grep -v "$ethmgmtipaddr" | sed -n 's/.*inet \([0-9\.]*\).*/\1/p' | head -n 1`
+    ethmgmtnet=`ipcalc -sn ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+  else
+    ethipaddr=`ip addr show dev eth0 | sed -n 's/.*inet \([0-9\.]*\).*/\1/p' | head -n 1`
+  fi
+}
+
+# Main
+if [ $# -lt 3 ]; then
+  echo "usage: hosts <filename> <version> <name>"
+  exit 1
+fi
+
+filename=$1
+version=$2
+name=$3
+
+get_netconfig
+
+#debug
+echo "System name: ${name}"
+echo "Version: $version"
+
+write_hosts
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

@@ -1,0 +1,53 @@
+#!/bin/sh
+#set -e -x
+
+remove_all_vlans() {
+  x=0
+  logger -t $0 -p daemon.info "debug: removing vlans."
+  while [ $x -lt "$num_vlans" ]; do
+    eval is_vlan="\$is_vlan$x"
+    eval vlan_id="\$vlan$x"
+    eval itf_nr="\$itf$x"
+
+    if [ $is_vlan -ne 0 ]; then
+      eth_vlan="eth${itf_nr}.${vlan_id}"
+    else
+      eth_vlan="eth${itf_nr}"
+    fi
+    logger -t $0 -p daemon.info "debug: removing vlan interface ${eth_vlan}"
+
+    if [ $is_vlan -ne 0 ]; then
+      /sbin/vconfig rem ${eth_vlan}
+    fi
+
+    x=$(( $x + 1 ))
+  done
+}
+
+
+# Main
+if [ $# -lt 3 ]; then
+  echo "usage: network <filename> <version>"
+  echo "               <num_vlans> [<itf_nr> <is_vlan> <vlan_id>]*"
+  exit 1
+fi
+
+filename=$1
+version=$2
+num_vlans=$3
+
+x=0
+while [ $x -lt "$num_vlans" ]; do
+  eval itf${x}=\"${4}\"
+  eval is_vlan${x}=\"${5}\"
+  eval vlan${x}=\"${6}\"
+  shift 3
+  x=$(( $x + 1 ))
+done
+
+remove_all_vlans
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0
+

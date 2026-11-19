@@ -1,0 +1,26 @@
+#!/bin/sh
+. ntc_functions
+
+get_fpga_version() {
+	getfpgaversion_reply="$(/usr/local/bin/cliclient GetFPGAVersion)"
+	getfpgaversion_reply="$(remove_newlines "${getfpgaversion_reply}")"
+	fpga_ntc="$(json_get_value "${getfpgaversion_reply}" "NtcNumber")"
+	fpga_version="$(json_get_value "${getfpgaversion_reply}" "Version")"
+	fpga_date="$(json_get_value "${getfpgaversion_reply}" "BuildDate")"
+	fpga_time="$(json_get_value "${getfpgaversion_reply}" "BuildTime")"
+	echo -e "fpga      : $fpga_ntc$fpga_version ($fpga_date $fpga_time)"
+}
+
+parse_software_version() {
+	for i in $(dd if=$1 skip=38 bs=1 count=8 2>/dev/null | sed -e 's/\(..\)/\1\n/g'); do printf "%d." 0x${i}; done | sed -e 's/\.$/\n/'
+}
+
+get_software_version() {
+	echo -n "$1 : "
+	parse_software_version $1
+}
+
+get_software_version /dev/img0
+get_software_version /dev/img1
+
+get_fpga_version

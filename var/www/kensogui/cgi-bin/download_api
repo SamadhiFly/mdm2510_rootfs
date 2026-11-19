@@ -1,0 +1,44 @@
+#!/bin/sh
+
+parse_request() {
+    documentation_type=$(expr match "$QUERY_STRING" '.*type=\([^&]*\)')
+}
+
+not_authorised() {
+    echo 'Status: 401 Not authorised'
+    echo 'Content-type: text/html'
+    echo
+    echo '<HTML><HEAD><TITLE>401 Not Authorised</TITLE></HEAD>'
+    echo '<BODY><H1>401 Not Authorised</H1>'
+    echo 'Provide session cookie or login'
+    echo '</BODY></HTML>'
+}
+
+. ./checkauth
+parse_request
+
+if [ "$documentation_type" = "internal" ]; then
+    if [ "$admin_mode" != 1 ]; then
+        not_authorised
+    else
+        echo 'Status: 200 Success'
+        echo 'Content-Encoding: gzip'
+        echo 'Content-Type: text/html; charset=UTF-8'
+        echo
+        cat /usr/local/share/documentation/json_api_internal.html.gz
+    fi
+elif [ "$documentation_type" = "public" ]; then
+    if [ "$installer_mode" != 1 -a "$admin_mode" != 1 ]; then
+        not_authorised
+    else
+        echo 'Status: 200 Success'
+        echo 'Content-Encoding: gzip'
+        echo 'Content-Type: text/html; charset=UTF-8'
+        echo
+        cat /usr/local/share/documentation/json_api_public.html.gz
+    fi
+else
+    . ./not_found
+fi
+
+exit 0

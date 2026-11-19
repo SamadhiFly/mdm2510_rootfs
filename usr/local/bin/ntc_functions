@@ -1,0 +1,113 @@
+#-------------------------------------------------------------------------------------------------------------------------------------------
+# This file contains general helper functions to make shell coding on the terminal easier and more consitent.
+# These functions have been tested to work in the feature-limited terminal shell.
+#-------------------------------------------------------------------------------------------------------------------------------------------
+# Usage: source ntc_functions
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
+# returns the current time in seconds since epoch
+get_epoch_seconds () {
+    echo "$(date +%s)"
+}
+
+# epoch_to_date [epoch]
+# [epoch] seconds since epoch
+# returns a human readable date
+epoch_to_date () {
+    echo "$(date -d @$1)"
+}
+
+# remove_newlines [multiline string]
+# returns the input string without newlines
+# Remark: Bash can also do replace in variables, but takes much longer than tr.
+remove_newlines () {
+    echo "$(echo ${1} | tr -d '\n')"
+}
+
+# json_get_value [json string] [key name] <subkey name>
+# [json string]  The json encoded string
+# [key name]     The key name to get the value from.
+#                If <subkey name> is given, the key name usually is a section name.
+# <subkey name>  optional sub key
+# Example: json_get_value "Key2" "Enabled" will return "false"
+# { "RequestData" : {
+#    "Key1" :
+#    {
+#            "Enabled" : true
+#    },
+#    "Key2" :
+#    {
+#            "Enabled" : false
+#    }
+# }}
+# returns the value of a key in a json formatted string
+# Warning: this is not real json parsing but a very crude and fast way of getting a value from a json string
+json_get_value () {
+    local inputstr="${1}"
+    local keystr="${2}"
+    inputstr="${inputstr##*${keystr}\" : }"
+    if [[ "$#" -ge "3" ]]; then
+        local subkeystr="${3}"
+        inputstr="${inputstr#*${subkeystr}\" : }"
+    fi
+    inputstr="${inputstr%%[,\} ]*}"
+    inputstr="${inputstr//\"}"
+    echo "${inputstr}"
+}
+
+# get_csv_value [csv string] [position]
+# [csv string] The comma-separated string. Field may contain spaces.
+# [position]   The position in the csv string, starting from 1
+# returns the n-th value from a comma separated string
+get_csv_value () {
+    local stats="$1"
+    local position="$2"
+    local data=""
+    set -f; IFS=','
+    set -- $stats
+    eval data=\$"${position}"
+    set +f; unset IFS
+    echo "${data}"
+}
+
+# get_variable [variable name]
+# [variable name] is a string identifying a variable name e.g. "my_var"
+# returns the content of a referenced variable
+# This allows you to make more complex constructions like $(get_variable "my_var_${some_index}")
+get_variable () {
+    eval echo "\${${1}}"
+}
+
+# set_variable [variable name] [value]
+# [variable name] is a string identifying a variable name e.g. "my_var"
+# [value]         the value to be set
+set_variable () {
+    eval $1=\"$2\"
+}
+
+# test if something is a number
+# ! does not work with decimal points or signs
+# is_number [value]
+# [number] the value to test
+# returns 0 when the value is a number, 1 otherwise
+is_number()
+{
+    case ${1#[-+]} in
+        *[!0-9]* | '') echo 1;;
+        * ) echo 0;;
+    esac
+}
+
+# test if the cliclient is reachable
+# usage: if ! is_cliclient_reachable; then return; fi
+# returns true or false
+is_cliclient_reachable()
+{
+    if [ -n "${VAR_cliclient_reachable}" ]; then ${VAR_cliclient_reachable}; return; fi
+    local output=""
+    local exitcode="0"
+    output="$(/usr/local/bin/cliclient GetAirMACAddress)"
+    exitcode="$?"
+    [[ "${exitcode}" != "0" ]] && VAR_cliclient_reachable=false || VAR_cliclient_reachable=true;
+    ${VAR_cliclient_reachable}
+}

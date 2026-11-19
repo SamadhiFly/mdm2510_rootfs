@@ -1,0 +1,45 @@
+#!/bin/sh
+tmpfile="/tmp/tmp..$$"
+retval=1 #default error
+
+if [ -z $1 ]
+then
+	echo "Usage: ./test_dnslookup hostname upstream_dns_server tun_bind_addr"
+	return $retval
+fi
+
+/usr/local/bin/test_conn_state
+retval2=$?
+
+if [ "$retval2" != 0 ]; then
+        return $retval2
+fi
+
+test_host=$1
+dns_server=$2
+tun_addr=$3
+
+# at this point there is no dnsmasq running which is listening on the lo interface
+# we start it here and couple it to the upstream dns server of the correct virtual network
+# after the test it is killed again
+
+/usr/sbin/dnsmasq --interface=lo --bind-interfaces --server=$2@$3 --pid-file=/var/state/test_pid_dns
+
+#TODO: try to get all the output of this program in the tmpfile
+nslookup $test_host > ${tmpfile}
+
+# when the nslookup finds a match: it will return the IP address and the name of the server
+# so when the word "Name:" appears in the result, we have found something
+result=`sed -n "/Name:/p" ${tmpfile}`
+
+if [ -n "${result}" ]
+then
+	retval=0 #success
+fi
+
+rm ${tmpfile} 
+kill `cat /var/state/test_pid_dns`
+
+rm /var/state/test_pid_dns
+
+return $retval

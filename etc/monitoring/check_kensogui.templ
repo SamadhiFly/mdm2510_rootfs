@@ -1,0 +1,8 @@
+name=Kensogui
+program=/usr/local/bin/check_kensogui.sh
+type=program
+timeout=%WDTIMEOUTSHORT%
+cron="%MINUTES% * * * *"
+retries=%WDRETRIES%
+cycle=%WDCYCLE%
+onfailure="kill -9 httpd"

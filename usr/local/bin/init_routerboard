@@ -1,0 +1,161 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+parse_tellinet_on_addin_board
+parse_tellishape_on_addin_board
+parse_enable_rescue_if
+parse_modemtype
+parse_startssh
+
+. /usr/local/bin/ifcfg_local_mgmt.sh
+. /usr/local/bin/ifcfg_internal_mgmt.sh
+. /usr/local/bin/ifcfg_ts_tn_connection.sh
+. /usr/local/bin/ifcfg_multicast.sh
+. /usr/local/bin/pxeboot
+
+JSONRPC_CLIENT_PORT=1111
+JSONRPC_SERVER_PORT=1111
+S3C_JSONRPC_PORT=3333
+TC_COMMAND_PORT=10010
+TSC_JSONRPC_PORT=2222
+TS_COMMAND_PORT=10210
+
+if [ "${CFG_routercontroller_supported}" -eq 1 -o "${CFG_routercontroller_supported}" -eq 2 ]; then 
+
+  #########################################
+  # Configure some generic eth0 settings. #
+  #########################################
+
+  # Eth0 needs to be up for configuring netring related settings.
+  /sbin/ip link set dev eth0 up
+  echo "any_arp,system" > /sys/class/net/eth0/netring_host_filter
+
+  if [ "${tellinet_on_addin_board}" -ne 0 ]; then
+    # MDM5010-style.
+    /sbin/ip link set dev eth0 down
+    # Reset to a known state.
+    /sbin/ip -4 addr flush dev eth0
+    /sbin/ip -6 addr flush dev eth0 scope global
+    /sbin/ip -6 addr flush dev eth0 scope site
+    /sbin/sysctl -w net.ipv4.conf.all.forwarding=1
+    /sbin/sysctl -w net.ipv6.conf.all.forwarding=0
+    # Higher MTU for for tellishape <> tellinet connection.
+    if [ "${tellishape_on_addin_board}" -eq 0 ]; then
+        /sbin/ip link set dev eth0 mtu 1792
+    else
+        /sbin/ip link set dev eth0 mtu 8000 # max BBF size
+    fi
+    # For configuring netring host filter, the interface needs to be up.
+    /sbin/ip link set dev eth0 up
+  fi
+
+  ############################################
+  # Configure dedicated VLAN-access devices. #
+  ############################################
+
+  # eth0.3000: internal mgmt
+  internal_mgmt_init
+
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+      # eth0.3010: native vlan local mgmt traffic
+      local_mgmt_init
+      . /usr/local/bin/init_firewall_addinboard
+      # eth0.3011: native vlan forward multicast traffic
+      init_forward_multicast
+      # eth0.3012: native vlan return multicast traffic
+      if [ "${tellishape_on_addin_board}" -eq 0 ]; then
+        init_return_multicast
+      fi
+  fi
+
+  if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+    # eth0.3001: tellishape <> tellinet
+    if [ "${tellishape_on_addin_board}" -eq 0 ]; then
+        ts_tn_connection_init
+    else
+        . /usr/local/bin/ifcfg_mainboard_tellishape.sh
+        mainboard2tellishape_init
+        tellishape2mainboard_init
+    fi
+
+    # Rescue interface.
+    if [ "${CFG_enable_rescue_if}" -eq 1 ]; then
+      . /usr/local/bin/ifcfg_rescue.sh
+      rescue_init
+    fi
+  fi
+
+  # Add firewall configuration  (TFTP, JSONRPC)
+  IPT="/usr/sbin/iptables"
+  key="EXTERNAL_ROUTER_INTERNAL_MGMT";
+  keyComment="-m comment --comment ${key}"
+
+  if [ "${CFG_modemtype}" -eq 13 ]; then
+      TFTP_IF=${PXE_IF}
+      TFTP_SIP=${PXE_SUBNET}
+      TFTP_DIP=${PXE_MB_IPADDR}
+      ${IPT} -A INPUT -p udp  -i ${TFTP_IF} --sport 68 --dport 67  -j ACCEPT ${keyComment}
+      pxeboot_start
+  else
+      TFTP_IF=${IM_IF}
+      TFTP_SIP=${IM_ADDINBOARD_IP}
+      TFTP_DIP=${IM_MAINBOARD_IP}
+  fi
+
+  # Listen to TFTP requests only on VLAN 3000 from IM_ADDINBOARD_IP. 
+  # TFTP client is configured in passive mode -> accept UDP request coming from internal mgmt VLAN on negotiated port 
+  # and not only on port 69.
+  ${IPT} -A INPUT -p udp  -i ${TFTP_IF} -s ${TFTP_SIP} -d ${TFTP_DIP} --dport 69 -j ACCEPT ${keyComment}
+  ${IPT} -A INPUT -p udp  -i ${TFTP_IF} -s ${TFTP_SIP} --sport 1023:65535  -d ${TFTP_DIP} --dport 1023:65535  -j ACCEPT ${keyComment}
+
+  # Listen for syslog traffic on VLAN 3000. This will be forwarded when applicable
+  ${IPT} -A INPUT -p udp  -i ${IM_IF} -s ${IM_SUBNET} --dport 514 -j ACCEPT -m comment --comment "syslog for routerboard"
+    
+  # Only in case of normal mode (no bridged mode), configure also the communication via JSONRPC
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+      # accept JSON-RPC request only on JSONRPC_SERVER_PORT
+      ${IPT} -A INPUT -p tcp --dport ${JSONRPC_SERVER_PORT}  -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP}  -j ACCEPT ${keyComment}
+
+      # accept JSON-RPC reply  from router controller (router controller as JSON RPC server listening on port JSONRPC_CLIENT_PORT)
+      ${IPT} -A INPUT -p tcp --sport ${JSONRPC_CLIENT_PORT} -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+  
+      if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+          # accept JSON-RPC replies from the segment3 controller running on the add-in board.
+          ${IPT} -A INPUT -p tcp --sport ${S3C_JSONRPC_PORT} -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+          # accept communications with Tellinet's command port.  Monit uses it for checking if Tellinet is alive, and modemcontroller needs it to fetch statistics.
+          ${IPT} -A INPUT -p tcp --sport ${TC_COMMAND_PORT} -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+      fi
+  
+      if [ "${tellishape_on_addin_board}" -eq 1 ]; then
+          # accept JSON-RPC replies from the tellishape controller running on the add-in board.
+          ${IPT} -A INPUT -p tcp --sport ${TSC_JSONRPC_PORT} -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+          # accept communications with Tellishape's command port.  Monit uses it for checking if Tellishape is alive, and modemcontroller needs it to fetch statistics.
+          ${IPT} -A INPUT -p tcp --sport ${TS_COMMAND_PORT} -i ${IM_IF} -s ${IM_SUBNET} -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+      fi
+  
+      # accept http request to router controller mgmt address (to get diagnostic report)
+      ${IPT} -A OUTPUT -p tcp --dport 80 -d ${IM_ADDINBOARD_IP} -j ACCEPT ${keyComment}
+      
+      # accept HTTP reply from router controller mgmt address (to get diagnostic report)
+      ${IPT} -A INPUT -p tcp --sport 80  -i ${IM_IF} -s ${IM_ADDINBOARD_IP} -d ${IM_MAINBOARD_IP}  -j ACCEPT ${keyComment}
+
+      # accept telnet request to router controller mgmt network (for debugging purpose, e.g. telnet host container, vc, ...)
+      ${IPT} -A OUTPUT -p tcp --dport 23 -d ${IM_SUBNET} -j ACCEPT ${keyComment}
+
+      # accept telnet reply from router controller mgmt network (for debugging purpose)
+      ${IPT} -A INPUT  -p tcp --sport 23 -i ${IM_IF} -s ${IM_SUBNET}  -d ${IM_MAINBOARD_IP} -j ACCEPT ${keyComment}
+
+      if [ "${CFG_startssh}" -eq 1 ]; then
+            # Allow ssh connection to routerboard
+            ${IPT} -A OUTPUT -p tcp --dport 22 -o "${IM_IF}" -d ${IM_SUBNET} -j ACCEPT  ${keyComment}
+            ${IPT} -A INPUT -p tcp --sport 22 -i "${IM_IF}" -s ${IM_SUBNET} -j ACCEPT  ${keyComment}
+      fi
+  fi
+  
+fi
+
+logger -t $0 -p daemon.info "$filename applied."
+
+exit 0

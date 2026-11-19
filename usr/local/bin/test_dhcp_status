@@ -1,0 +1,35 @@
+#!/bin/sh
+retval=1 #default error
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+#if DHCP is not enabled, return success
+dhcp_enabled=`sed -n 's/^dhcp_enabled=\([01]\)/\1/p' /var/state/cfg`
+
+if [ -n "${dhcp_enabled}" ]; then
+	if [ "${dhcp_enabled}" -eq 0 ]; then
+		echo "DHCP is not enabled" >> /var/state/test_fail_eth
+		retval=0 #success
+	else
+		echo "DHCP is enabled" >> /var/state/test_fail_eth
+	fi
+else
+	echo "DHCP configuration unknown" >> /var/state/test_fail_eth
+fi
+
+#test whether the dnsmasq.leases file contains anything at all
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    dhcp_leases=`/usr/local/bin/cliclient RouterControllerGetLANTestResult -g RequestData.DHCPLeases`
+else
+    dhcp_leases=`sed -n "/.*/p" /var/state/dnsmasq.leases | wc -l`
+fi
+if [ "${dhcp_leases}" -ge 1 ]
+then
+	echo "an IP address has been distributed" >> /var/state/test_fail_eth
+	retval=0 #success
+else
+	echo "no IP address has been distributed" >> /var/state/test_fail_eth
+fi
+
+return $retval

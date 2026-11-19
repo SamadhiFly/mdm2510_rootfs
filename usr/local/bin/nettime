@@ -1,0 +1,77 @@
+#!/bin/sh
+#set -e -x
+
+write_ntpd_conf() {
+  tmpl="/etc/ntp.conf.templ"
+  tmp="/tmp/ntp.conf.tmp"
+  cfg="/etc/ntp.conf"
+  cp -f $tmpl $tmp
+  sed -i "s/%BROADCASTDELAY%/${ntp_delay}/" $tmp
+  cat $tmp > $cfg
+  rm -f $tmp
+}
+
+stop_ntpd() {
+  if [ -e "/var/run/ntpd.pid" ]; then
+    kill -HUP `cat /var/run/ntpd.pid` 2>/dev/null
+    rm /var/run/ntpd.pid 2>/dev/null
+  fi
+}
+
+wait_setclock() {
+  NTRIES=0
+  # Periodically, an ntp multicast message is sent over the fwd link. In some
+  # configurations, the frequency may be as low as about once every 64 seconds.
+  # It takes about 40 seconds to go from forward synchronization to full network setup.
+  # 20 seconds should therefore most of the time be enough for setclock to update the clock.
+  # In any case, if $timeserver is set, ntpdate will be called later by this script
+  # and serves as a backup.
+  MAXTRIES=20
+  while [ "`pidof setclock`" != "" ]; do
+    logger -t $0 -p daemon.info "$filename waiting for setclock to exit."
+    sleep 1
+    NTRIES=`expr $NTRIES + 1`
+    if [ $NTRIES -gt $MAXTRIES ]; then
+      logger -t $0 -p daemon.warn "$filename setclock timeout."
+      killall setclock
+      break
+    fi
+  done
+}
+
+start_ntpd() {
+  /usr/sbin/ntpd -A -p /var/run/ntpd.pid
+}
+
+# Main
+if [ $# -lt 3 ]; then
+  echo "usage: nettime <filename> <version> <ntp delay> [<timeserver>]"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+ntp_delay=$3
+timeserver=$4
+
+#debug
+echo "Timeserver: ${timeserver}"
+echo "NTP broadcast delay: ${ntp_delay}"
+
+wait_setclock
+stop_ntpd
+
+if [ -n "$timeserver" ]; then
+  /usr/bin/ntpdate -b -s -t 10 $timeserver
+  if [ $? -ne 0 ]; then
+    logger -t $0 -p daemon.error "$filename ntpdate failed."
+  fi
+fi
+
+write_ntpd_conf
+start_ntpd
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

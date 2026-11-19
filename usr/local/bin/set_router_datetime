@@ -1,0 +1,38 @@
+#!/bin/sh
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+	# boot behaviour (waiting for addin board -- SMS-5858)
+	# do an update every minute
+	for i in `seq 1 20`; do
+		DATE_CUR=`date +%s`
+		/usr/local/bin/cliclient -I "{ \"FunctionName\": \"RouterControllerSetDateTime\", \"Params\": { \"UnixTime\": $DATE_CUR } }"
+		sleep 30
+	done    
+
+    DATE_LAST_UPDATE=0
+    DATE_PREV=0
+    while true; do
+        DATE_CUR=`date +%s`
+        DIFF_DATE=$(($DATE_CUR-$DATE_PREV))
+        DIFF_LAST_UPDATE=$(($DATE_CUR-$DATE_LAST_UPDATE))
+
+        # we try an update when:
+        # - there's a jump in local time higher than y seconds
+        #   Note that a diff of 60 is normal because of the 'sleep 60' below,
+        #   so we need a higher value than 60 (the 70 is arbitrarily taken)
+        # - we haven't done an update for x seconds (DIFF_LAST_UPDATE)
+        if [ $DIFF_DATE -gt 70 ] || [ $DIFF_LAST_UPDATE -gt 3600 ]; then
+            /usr/local/bin/cliclient -I "{ \"FunctionName\": \"RouterControllerSetDateTime\", \"Params\": { \"UnixTime\": $DATE_CUR } }"
+            # we don't check $? because it also returns 0 in case of an unsuccessful rpc
+            # parsing the json output would be required
+            DATE_LAST_UPDATE=$DATE_CUR
+        fi
+
+        DATE_PREV=$DATE_CUR
+        sleep 60
+    done
+fi
+

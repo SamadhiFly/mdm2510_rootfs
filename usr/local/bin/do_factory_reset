@@ -1,0 +1,21 @@
+#!/bin/sh
+change_var() {
+      sed -i "s#^$1=.*#$1=$2#" /var/state/cfg
+}
+ 
+  fac_netmask=`sed -n "s/^fac_netmask=\(.*\)$/\1/p" /var/state/cfg`  
+  fac_ipaddr=`sed -n "s/^fac_ipaddr=\(.*\)$/\1/p" /var/state/cfg`  
+  fac_ntcipasswd=`sed -n "s/^fac_ntcipasswd=\(.*\)$/\1/p" /var/state/cfg`
+  change_var "netmask" "${fac_netmask:=255.255.255.0}"
+  change_var "ipaddr" "${fac_ipaddr:=192.168.1.1}"
+  change_var "ntcipasswd" "${fac_ntcipasswd:=s3p}"
+
+
+  # reset flash config parameter related to external router controller if present
+  /usr/local/bin/do_reset_routercontroller_flash_params
+  
+  #disable moob feature
+  /usr/local/bin/do_reset_moob_flash_params
+
+ /usr/local/bin/writecfg
+   

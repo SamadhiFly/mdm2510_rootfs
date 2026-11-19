@@ -1,0 +1,20 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+# In case of router controller supported, update route for mgmt newtwork towards router controller.
+# (to be used when local mgmt address is changed and we do not want to reboot to apply the changes)
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    . /usr/local/bin/ifcfg_local_mgmt.sh
+    if [ $# -eq 4 ]; then
+        local_mgmt_update_route $1 $2 $3 $4
+    else
+        local_mgmt_update_route $1 $2
+    fi
+    logger -t $0 -p daemon.info "New route for local mgmt address towards router controller applied"
+fi
+
+exit 0
+

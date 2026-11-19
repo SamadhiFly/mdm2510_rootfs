@@ -1,0 +1,97 @@
+#!/bin/sh
+
+parse_request() {
+        if [ "$REQUEST_METHOD" = "POST" ]; then
+                if ! read -r request; then
+                        QUERY_STRING="$request"
+                fi
+        fi
+        loglevel=$(expr match "$QUERY_STRING" '.*filter=\([0-9]\)')
+        case "$loglevel" in
+            1) severity="emerg"
+                ;;
+            2) severity="alert"
+                ;;
+            3) severity="crit"
+                ;;
+            4) severity="err"
+                ;;
+            5) severity="warn"
+                ;;
+            6) severity="notice"
+                ;;
+            7) severity="info"
+                ;;
+            8) severity="debug"
+                ;;
+            *) severity=""
+                ;;
+        esac
+        vrf=$(expr match "$QUERY_STRING" '.*datafilt=\([0-9a-zA-Z]*\)')
+        if [ -z "$vrf" ]; then
+                vrf=""
+        fi
+        # Keep only most recent $buffer lines
+        buffer=$(expr match "$QUERY_STRING" '.*last=\([0-9]*\)')
+        if [ -z "$buffer" ] || [ "$buffer" -eq 0 ]; then
+            # No-op
+            pickLast="tee"
+        else
+            pickLast="tail -n $buffer"
+        fi
+
+        # Reverse if needed
+        showmode=$(expr match "$QUERY_STRING" '.*showmode=\([0-9]*\)')
+        if [ "$showmode" -eq 2 ]; then
+            # Do revert with sed (tac not available)
+            maybeRevert="sed -n '1!G;h;\$p'"
+        else
+            # No-op
+            maybeRevert="tee"
+        fi
+
+        logLineNumber=$(expr match "$QUERY_STRING" '.*logline=\([0-9]*\)')
+        if [ -z "$logLineNumber" ] || [ "$logLineNumber" -eq 0 ]; then
+            # No-op
+            startFromLine="tee"
+        else
+            nextLogLine=$((logLineNumber+1))
+            startFromLine="tail -n +$nextLogLine"
+        fi
+}
+
+# Main
+parse_request
+
+echo "Content-type: text/plain"
+echo "Content-Encoding: gzip"
+echo ""
+
+lcmd="cat /tmp/syslog.log"
+
+routercontroller_supported=`sed -n 's/^routercontroller_supported=\([1]\)/\1/p' /var/state/cfg`
+if [  -n "$routercontroller_supported"  ]; then
+    echo "{ \"FunctionName\": \"RouterControllerGetLog\", \"Params\": { \"VRF\":\"${vrf}\", \"Severity\":\"${severity}\", \"NbrOfLines\":0, \"Mode\":\"1\", \"LogLine\":0 }}" > /tmp/getlog.txt
+    /usr/local/bin/cliclient -i /tmp/getlog.txt >/dev/null
+
+    outputWithLineNumbers=$(eval "$lcmd" | tail -n +2 | awk '{print NR " " $s}' | eval $startFromLine | eval $pickLast | eval $maybeRevert)
+
+    # Get last line number
+    if [ ! -z "$outputWithLineNumbers" ]; then
+        if [ "$showmode" -eq 2 ]; then
+            lastLine=$(echo "$outputWithLineNumbers" | head -n 1)
+        else
+            lastLine=$(echo "$outputWithLineNumbers" | tail -n 1)
+        fi
+        lastLineNumber=$(expr match "$lastLine" '\([0-9]*\)*')
+    else
+        lastLineNumber=-1 # -1 indicates no matched content
+    fi
+    {
+        echo "$lastLineNumber"
+        echo "$outputWithLineNumbers" | awk '{$1=""; print}'
+    } | gzip
+fi
+
+exit 0
+

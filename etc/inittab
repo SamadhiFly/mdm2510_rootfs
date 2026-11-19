@@ -1,0 +1,12 @@
+#
+# /etc/inittab
+#
+::sysinit:/etc/overlayinit
+::sysinit:/etc/init.d/rcS
+::once:/usr/local/bin/start_getty -L 115200 ttyS0 vt100
+::sysinit:/etc/rc.sh
+
+# Stuff to do before rebooting
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r
+

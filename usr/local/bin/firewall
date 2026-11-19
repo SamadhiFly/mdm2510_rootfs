@@ -1,0 +1,173 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+. /etc/parse_modem_netdev.sh
+parse_routercontroller_supported
+
+IPT="/usr/sbin/iptables"
+IP6T="/usr/sbin/ip6tables"
+
+get_syslogconfig() {
+ cfg_syslogmode=`sed -n "s/^syslogmode=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogport=`sed -n "s/^syslogport=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogaddr=`sed -n "s/^syslogaddr=\(.*\)$/\1/p" /var/state/cfg`
+}
+
+get_netconfig() {
+  ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+  ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+
+  if [ -n "$ethmgmtipaddr" ]; then
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+    ethmgmtnet=`ipcalc -sn ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+  fi
+}
+
+start_firewall() {
+  # configure filtering and start routing
+  #  default policy: accept nothing incoming, everything outgoing
+
+  # Turn on global drop rules before specific accept and drop rules
+  /usr/local/bin/set_firewall_input_policy
+  ${IPT} -P FORWARD DROP
+  if [ $ipv6_enable ]; then
+    ${IP6T} -P FORWARD DROP
+  fi
+
+  # allow everything from localhost, the modem i/f
+  ${IPT} -t mangle -A PREROUTING -i lo -j ACCEPT ${keyComment}
+  if [ $ipv6_enable ]; then
+    ${IP6T} -t mangle -A PREROUTING -i lo -j ACCEPT ${keyComment}
+  fi
+  # dont allow igmp packets on modem interface, igmpd will be started soon
+  for demod in ${modem_netdev_sig_demods}; do
+    ${IPT} -t mangle -A PREROUTING -p igmp -i ${demod} -j DROP ${keyComment}
+	if [ $ipv6_enable ]; then
+	  ${IP6T} -t mangle -A PREROUTING -p igmp -i ${demod} -j DROP ${keyComment}
+	  ${IP6T} -t mangle -A PREROUTING -i ${demod} -j ACCEPT ${keyComment}
+    fi
+  done
+
+  ${IPT} -A INPUT -i lo -j ACCEPT ${keyComment}
+  for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+    ${IPT} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+  done
+  ${IPT} -A OUTPUT -o lo -j ACCEPT ${keyComment}
+  ${IPT} -A OUTPUT -o ${modem_netdev_generic_mod} -j ACCEPT ${keyComment}
+  ${IPT} -A FORWARD -i lo -j ACCEPT ${keyComment}
+  for demod in ${modem_netdev_sig_demods}; do
+    ${IPT} -A FORWARD -i ${demod} -j ACCEPT ${keyComment}
+  done
+  if [ $ipv6_enable ]; then
+    ${IP6T} -A INPUT -i lo -j ACCEPT ${keyComment}
+    for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+      ${IP6T} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+    done
+    ${IP6T} -A OUTPUT -o lo -j ACCEPT ${keyComment}
+    ${IP6T} -A OUTPUT -o ${modem_netdev_generic_mod} -j DROP  ${keyComment}
+    ${IP6T} -A FORWARD -i lo -j ACCEPT ${keyComment}
+    for demod in ${modem_netdev_sig_demods}; do
+      ${IP6T} -A FORWARD -i ${demod} -j ACCEPT ${keyComment}
+    done
+  fi
+  
+  # block IGMP messages when joining/leaving a multicast group
+  ${IPT} -A OUTPUT -p igmp -o tun2 -j DROP ${keyComment}
+  ${IPT} -A POSTROUTING -t mangle -p igmp -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+  if [ $ipv6_enable ]; then
+    ${IP6T} -A OUTPUT -p igmp -o tun2 -j DROP ${keyComment}
+    ${IP6T} -A POSTROUTING -t mangle -p igmp -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+  fi
+  
+  # block outgoing ICMP destination-unreachable messages
+  ${IPT} -A OUTPUT -p icmp --icmp-type destination-unreachable -o tun2 -j DROP ${keyComment}
+  if [ $ipv6_enable ]; then
+    ${IP6T} -A OUTPUT -p icmpv6 --icmpv6-type destination-unreachable -o tun2 -j DROP ${keyComment}
+  fi
+  
+  #  Ethernet management IP address should still be reachable from hosts in the
+  #  same subnet for ICMP and HTTP and communication Tellicast-Tellishape
+  #
+  #  Does not exist for IPv6
+  #
+  #  Note: in theory, we should/could add an ACCEPT  rule to the PREROUTING chain of the mangle table, each time we add a rule to the INPUT chain.
+  #  However, the PREROUTING's policy is ACCEPT and is never changed, so there is really no reason, unless there is a DROP or mark rule we
+  #  need to avoid by having an ACCEPT earlier. As a result, we do not add ACCEPT rules to the PREROUTING table. for the eth interfaces.
+  if [ -n "$ethmgmtipaddr" ]; then
+    IF=eth0
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p icmp -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 80 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 8000 -j ACCEPT ${keyComment} #Tellinet GUI
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 11200 -j ACCEPT ${keyComment} #Tellishape GUI
+    if [ "$external_tellishape_feedback" = 1 ]; then
+       ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 10250 -j ACCEPT ${keyComment}
+    fi
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p tcp --dport 53 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p udp --dport 53 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${IF} -d ${ethmgmtipaddr} -p udp --dport 123 -j ACCEPT ${keyComment}
+
+    # In case of router controller supported, local mgmt address is configured on router controller
+    ${IPT} -A OUTPUT -s ${ethmgmtnet}/${ethmgmtprefix} -o tun2 -j DROP ${keyComment}
+
+
+  fi
+  if [ "${cfg_syslogmode}" = 1 ]; then
+      ${IPT} -A OUTPUT -d ${cfg_syslogaddr} -p udp --dport ${cfg_syslogport} -o tun2 -j DROP ${keyComment}
+  fi
+
+  # Route the wget test (which will bind on the tellitec address) through the tellinet tunnel (SMS-940)
+  # TODOTVRD: If some iptables rule is still needed for this test, it will probably need to use one of the tunvl addresses.
+  #${IP6T} -t mangle -A OUTPUT -s ${tellitec_taddress} -p tcp --dport 80 -j MARK --set-mark 2 ${keyComment}
+
+  # Turn on global accept rules after specific drop rules
+  ${IPT} -P OUTPUT ACCEPT
+  ${IPT} -t mangle -P PREROUTING ACCEPT  # default is accept, and is never closed so seems not needed
+  if [ $ipv6_enable ]; then
+    ${IP6T} -P OUTPUT ACCEPT
+    ${IP6T} -t mangle -P PREROUTING ACCEPT
+  fi
+}
+
+# Main
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    echo "should not be used when addin board is present"
+    exit 0
+fi
+
+if [ $# -lt 5 ]; then
+  echo "usage: firewall <filename> <version> <external tellishape feedback>"
+  echo "                <ipv6 enable>"
+  echo "                <rule key>"
+  echo "        The <rule key> is a unique key identifying the iptables rules that were added to implement firewalling."
+  echo "        This key probably looks something like *IPTKEY:FW*."
+  exit 1
+fi
+
+filename="${1}"
+version="${2}"
+external_tellishape_feedback="${3}" 
+
+ipv6_enable="${4}"
+
+key=$5
+keyComment="-m comment --comment ${key}"
+
+get_netconfig
+get_syslogconfig
+
+
+#DEBUG output
+
+echo -n "Support external tellishape feedback: "
+if [ "$external_tellishape_feedback" = 1 ]; then
+  echo "yes"
+else
+  echo "no"
+fi
+
+start_firewall
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

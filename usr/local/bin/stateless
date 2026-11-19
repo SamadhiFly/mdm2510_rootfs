@@ -1,0 +1,114 @@
+#!/bin/sh
+
+pidfile="/var/run/radvd.pid"
+conffile="/etc/radvd.conf"
+radvd="/usr/sbin/radvd"
+
+write_radvd_conf() {
+  ipv6_autonomous="";
+
+  if [ "${ipv6_prefixlen}" -eq 64 ]
+  then
+    ipv6_autonomous="on";
+  else
+    ipv6_autonomous="off";
+  fi
+
+  rm ${conffile}
+
+  i=0
+  while [ $i -lt ${vlan} ]; do
+    eval itf="\$itf$i"
+    eval mtu="\$mtu$i"
+    eval ipv6_addr="\$ipv6_addr$i"
+    eval ipv6_prefixlen="\$ipv6_prefixlen$i"
+
+    echo "interface ${itf}" >> ${conffile}
+    echo "{" >> ${conffile}
+    echo "    AdvSendAdvert on;" >> ${conffile}
+    echo "    AdvManagedFlag off;" >> ${conffile}
+    echo "    AdvOtherConfigFlag on;" >> ${conffile}
+    echo "    AdvLinkMTU ${mtu};" >> ${conffile}
+    echo "    MaxRtrAdvInterval 30;" >> ${conffile}
+    echo "" >> ${conffile}
+    echo "    prefix ${ipv6_addr}/${ipv6_prefixlen}" >> ${conffile}
+    echo "    {" >> ${conffile}
+    echo "        AdvOnLink on;" >> ${conffile}
+    echo "        AdvAutonomous ${ipv6_autonomous};" >> ${conffile}
+    echo "        AdvValidLifetime 180;" >> ${conffile}
+    echo "        AdvPreferredLifetime 120;" >> ${conffile}
+    echo "" >> ${conffile}
+    echo "    };" >> ${conffile}
+    echo "" >> ${conffile}
+    echo "    RDNSS ${ipv6_addr}" >> ${conffile}
+    echo "    {" >> ${conffile}
+    echo "    };" >> ${conffile}
+    echo "" >> ${conffile}
+    echo "};" >> ${conffile}
+    i=$(( $i + 1 ))
+  done
+}
+
+stop_radvd() {
+  if [ -e "${pidfile}" ]; then
+    kill `cat ${pidfile}`
+    sleep 1
+    rm -f "${pidfile}"
+  fi
+}
+
+start_radvd() {
+   ${radvd} -C "${conffile}" -p "${pidfile}"
+}
+
+# Main
+if [ $# -lt 2 ]; then
+  echo "usage: stateless <filename> <version> [<interface> <ipv6 address> <ipv6 prefix length> <mtu>]*"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+vlan=0
+n=2 #we have already read 2 parameters
+nrOfParams=$# #Copy, because the value of $# is modified by "shift"
+while [ $n -lt "$nrOfParams" ]; do
+  eval "itf${vlan}=$3"
+  eval "ipv6_addr${vlan}=$4"
+  eval "ipv6_prefixlen${vlan}=$5"
+  eval "mtu${vlan}=$6"
+  shift 4
+  n=$(( $n + 4 ))
+  vlan=$(( $vlan + 1 ))
+done
+
+#Debug output
+echo "Read $n parameters of $nrOfParams"
+echo "Number of vlans: $vlan"
+n=0
+while [ $n -lt "$vlan" ]; do
+  eval itf="\$itf$n"
+  eval mtu="\$mtu$n"
+  eval ipv6_addr="\$ipv6_addr$n"
+  eval ipv6_prefixlen="\$ipv6_prefixlen$n"
+
+  echo "itf$n $itf"
+  echo "mtu$n $mtu"
+  echo "ipv6_addr$n $ipv6_addr"
+  echo "ipv6_prefixlen$n $ipv6_prefixlen"
+
+  let "n += 1"
+done
+
+
+stop_radvd
+write_radvd_conf
+if [ $vlan -ne 0 ];then
+    start_radvd
+fi
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0
+

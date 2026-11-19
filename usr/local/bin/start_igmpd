@@ -1,0 +1,26 @@
+#!/bin/sh
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+. /usr/local/bin/ifcfg_local_mgmt.sh
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    IGMP_IF=${LM_IF}
+else
+    IGMP_IF=eth0
+fi
+
+. /etc/parse_modem_netdev.sh
+MODEM_NETDEV_DEMODS=""
+for demod in ${modem_netdev_sig_demods}; do
+	MODEM_NETDEV_DEMODS="${MODEM_NETDEV_DEMODS} -I ${demod}"
+done
+
+/usr/local/sbin/killigmpd 2> /dev/null
+
+if [ -s /etc/mgroup.conf ]; then
+    /usr/local/bin/igmpd -i ${IGMP_IF} ${MODEM_NETDEV_DEMODS} -m 2>&1
+else
+    /usr/local/bin/igmpd -i ${IGMP_IF} ${MODEM_NETDEV_DEMODS} -a 2>&1
+fi

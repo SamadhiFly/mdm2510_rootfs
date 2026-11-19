@@ -1,0 +1,8 @@
+driftfile /var/state/ntp.drift
+multicastclient 224.0.1.1
+multicastclientinterface /etc/sig_demod
+broadcastdelay %BROADCASTDELAY%
+restrict default kod nomodify notrap nopeer noquery nomrulist
+restrict -6 default kod nomodify notrap nopeer noquery nomrulist
+restrict 127.0.0.1
+restrict -6 ::1

@@ -1,0 +1,145 @@
+
+# preparation of U-Boot environment
+###################################
+
+set -e
+trap '[ "$?" -ne 77 ] || exit 77' EXIT
+
+die() {
+	>&2 echo Failure: $@
+	exit 77
+}
+
+TMPUBOOTENV="/tmp/ubootenv"
+PROC_CMDLINE=/proc/cmdline
+
+# returns the string "<active_device> <redundant_device>"
+# devices separated by a space
+show_active_redundant_device()
+{
+        DEVA="$1"
+        DEVB="$2"
+        if [ -n "$DEVA" ]; then shift; fi
+        if [ -n "$DEVB" ]; then shift; fi
+
+        case "`/usr/sbin/modemconfigtool $@ state "$DEVA"`:`/usr/sbin/modemconfigtool $@ state "$DEVB"`" in
+        good:*)
+                echo "$DEVA" "$DEVB"
+                ;;
+        *:good)
+                echo "$DEVB" "$DEVA"
+                ;;
+        *:corrupt)
+                echo "$DEVA" "$DEVB"
+                ;;
+        *)
+                echo "$DEVB" "$DEVA"
+                ;;
+        esac
+}
+
+
+take_config_lock()
+{
+	CFGLOCK=/var/run/cfg.lock
+	exec 200>${CFGLOCK}
+	flock -x 200
+}
+
+release_config_lock()
+{
+	exec 200<&-
+}
+
+
+get_cmdline_var()
+{
+	cat ${PROC_CMDLINE} | tr ' ' '\n' | sed -n "s,^"$1"=\(.*\)$,\1,p"
+}
+
+exists_cmdline_var()
+{
+	test -n "$(get_cmdline_var $1)"
+}
+
+
+is_mp_supported()
+{
+    exists_cmdline_var "selMode"
+}
+
+exists_uboot_var()
+{
+	grep -q "^$1=" ${TMPUBOOTENV}
+}
+
+get_uboot_var()
+{
+	sed -n "s,^"$1"=\(.*\)$,\1,p" ${TMPUBOOTENV}
+}
+
+update_uboot_var()
+{
+	if [ -z "$2" ]; then
+		sed -i "/^"$1"=/d" ${TMPUBOOTENV}
+	else
+		if grep -q "^$1=" ${TMPUBOOTENV}; then
+			sed -i "s,^"$1"=.*$,"$1"='"$2"'," ${TMPUBOOTENV}
+		else
+			sed -i "1i\\"$1"='"$2"'" ${TMPUBOOTENV}
+		fi
+	fi
+}
+
+upgrade_in_progress()
+{
+	if [ "$(get_uboot_var tryotherbuild)" == "1" ]; then
+		return 0
+	fi
+	if [ "$(get_uboot_var tryotherslot)" == "1" ]; then
+		return 0
+	fi
+	if [ "$(get_uboot_var activemode)" != "$(get_uboot_var trymode)" ]; then
+		return 0
+	fi
+
+	return 1
+}
+
+read_uboot_env()
+{
+	CFG=$(show_active_redundant_device /dev/cfg0 /dev/cfg1 -r -s0x1000)
+	ACTIVE=$(echo ${CFG} | cut -d ' ' -f 1)
+	REDUNDANT=$(echo ${CFG} | cut -d ' ' -f 2)
+
+	/usr/sbin/modemconfigtool -r -s0x1000 read "$ACTIVE" > ${TMPUBOOTENV}
+	sed -i -e "s/^\([^=]*\)='\(.*\)'$/\1=\2/g" "${TMPUBOOTENV}"
+	ENV_MD5=$(md5sum ${TMPUBOOTENV})
+}
+
+write_uboot_env()
+{
+	ENV_NEW_MD5=$(md5sum ${TMPUBOOTENV})
+	if [ "${ENV_MD5}" != "${ENV_NEW_MD5}" ]; then
+		(/usr/sbin/modemconfigtool -r -s0x1000 update -ax ${REDUNDANT} -i ${TMPUBOOTENV} && \
+		/usr/sbin/modemconfigtool -r -s0x1000 update -ax ${ACTIVE} -i ${TMPUBOOTENV}) || die "can not update ubootenv"
+	fi
+    rm -f ${TMPUBOOTENV}
+}
+
+execute_with_cfg_lock()
+{
+	callback=$1
+	shift
+
+	take_config_lock
+	rm -f ${VAR_STATE_CFG}
+	read_uboot_env
+	${callback} $@
+	write_uboot_env
+	release_config_lock
+	if test -e /usr/local/bin/readcfg > /dev/null; then
+		/usr/local/bin/readcfg
+	fi
+}
+

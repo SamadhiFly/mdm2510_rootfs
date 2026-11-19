@@ -1,0 +1,80 @@
+#!/bin/sh
+#set -e -x
+# SNMP deamon config script. This reads community strings from flash and applies default configuration for the daemon
+
+#default community strings
+DEFAULT_RO="ntcpublic"
+DEFAULT_RW="ntcprivate"
+
+#path of templated and current configuration file
+SNMP_TEMPL="/etc/snmp/snmpd.conf.tmpl"
+SNMP_CONF="/etc/snmp/snmpd.conf"
+#path where mibs are stored
+MIBS="/usr/local/share/mibs"
+
+get_communitystrings() {
+ ro_community_string=`sed -n "s/^snmp_rocommunitystring=\(.*\)$/\1/p" /var/state/cfg`
+ rw_community_string=`sed -n "s/^snmp_rwcommunitystring=\(.*\)$/\1/p" /var/state/cfg`
+ if [ -z $ro_community_string ]; then
+     ro_community_string=$DEFAULT_RO
+     /bin/echo "snmp_rocommunitystring=$DEFAULT_RO" >> /var/state/cfg
+ fi
+
+ if [ -z $rw_community_string ]; then
+     rw_community_string=$DEFAULT_RW
+     /bin/echo "snmp_rwcommunitystring=$DEFAULT_RW" >> /var/state/cfg
+ fi
+}
+
+stop_snmpd() {
+  snmp_pid=$(/bin/pidof  $(/usr/bin/basename snmpd))
+  if [ -z $snmp_pid ]; then
+      echo "snmpd is not running"
+  else 
+     echo "stop snmpd pid " $snmp_pid
+     kill $snmp_pid
+  fi
+}
+
+create_snmpdconf() {
+    cp $SNMP_TEMPL $SNMP_CONF
+    sed -i "s/com2sec     ro         default         public"/"com2sec     ro         default         $ro_community_string/g" $SNMP_CONF
+    sed -i "s/com2sec6    ro6        default         public"/"com2sec6    ro6        default         $ro_community_string/g" $SNMP_CONF
+    sed -i "s/com2sec     rw         default         private"/"com2sec     rw         default         $rw_community_string/g" $SNMP_CONF
+    sed -i "s/com2sec6    rw6        default         private"/"com2sec6    rw6        default         $rw_community_string/g" $SNMP_CONF
+}
+
+start_snmpd() {
+    echo "start snmpd"
+    /usr/sbin/snmpd -c $SNMP_CONF -M $MIBS -m ALL -LS 6d 
+}
+
+#Main
+if [ $# -ne 1 ] && [ $# -ne 3 ]; then
+    echo "usage: $0 <restart_flag>"
+    echo "                   <restart_flag> = 0 do not restart snmpd"
+    echo "                   <restart_flag> = 1 restart snmpd"
+    echo "usage: $0 <restart_flag> <ro_community_string> <rw_community_string>"
+    echo "                   <restart_flag> = 0 do not restart snmpd"
+    echo "                   <restart_flag> = 1 restart snmpd"
+    echo "                   <ro_community_string> = Read-Only Community"
+    echo "                   <rw_community_string> = Read-Write Community"
+    exit 1
+fi
+
+restart_flag=$1
+if [ $restart_flag -eq 1 ]; then
+    stop_snmpd
+fi
+if [ $# -ne 3 ]; then
+    get_communitystrings
+    create_snmpdconf
+else
+    ro_community_string=$2
+    rw_community_string=$3
+    create_snmpdconf
+fi
+
+start_snmpd
+
+logger -t $0 -p daemon.info "$filename applied."

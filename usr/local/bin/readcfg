@@ -1,0 +1,89 @@
+#!/bin/sh
+
+MODEMNAME=`cat /proc/device-tree/model`
+TMPCFG=/var/state/cfg-$$
+TFTPCFG=/var/state/tftp-cfg-$$
+
+if [ -z "$LOCK" ]; then
+	touch /var/state/cfg
+	LOCK=/var/run/cfg.lock
+	export LOCK
+	flock -s $LOCK "$0" "$@"
+	exit $?
+fi
+
+select_redundant_device()
+{
+	DEVA="$1"
+	DEVB="$2"
+	if [ -n "$DEVA" ]; then shift; fi
+	if [ -n "$DEVB" ]; then shift; fi
+
+	case "`/usr/sbin/modemconfigtool $@ state "$DEVA"`:`/usr/sbin/modemconfigtool $@ state "$DEVB"`" in
+	good:inactive)
+		echo "$DEVA"
+		;;
+	*:inactive|*:good)
+		echo "$DEVB"
+		;;
+	*)
+		echo "$DEVA"
+		;;
+	esac
+}
+
+fail_reboot() {
+	echo "$@" >&2
+	{
+		echo "readcfg: scheduled reboot soon" >&2
+		sleep 60 && { echo "readcfg: reboot due to modemconfig failure"; reboot; }
+	} &
+	exit 1
+}
+
+# make sure $TMPCFG is present
+touch "$TMPCFG"
+
+case "$MODEMNAME" in
+*MDM2210*|*MDM3310*|*MDM5010*|*MDM2510*|*MDM2010*)
+	CFG=`select_redundant_device /dev/cfg0 /dev/cfg1 -r -s0x1000`
+	/usr/sbin/modemconfigtool -r -s0x1000 read "$CFG" > "$TMPCFG"
+	if [ -r "/mnt/config/config" ]; then
+		/usr/sbin/modemconfigtool -r -o "hdrsep,grow,sep=nl,00" read /mnt/config/config >> "$TMPCFG"
+	fi
+	;;
+*AMC5001*)
+	/usr/sbin/modemconfigtool -s0x1000 read "/dev/ubootenv" > "$TMPCFG" || fail_reboot "readcfg: reading /dev/ubootenv failed"
+	/usr/sbin/modemconfigtool -s0x1000 read "/dev/productiontag" >> "$TMPCFG" && echo "OK" > /var/state/productiontagstatus || { echo "readcfg: reading /dev/productiontag failed"; echo "NOK" > /var/state/productiontagstatus; }
+	if [ -r "/mnt/cal/modcalibration" ]; then
+		/usr/sbin/modemconfigtool read "/mnt/cal/modcalibration" >> "$TMPCFG" || echo "readcfg: reading /mnt/cal/modcalibration failed" >&2
+	fi
+	# assign IP address
+	source "$TMPCFG"
+	[ -n "$configurationname" ] || fail_reboot "readcfg: no $$configurationname defined"
+	# explicitely do not test the result of these commands.
+	# They may fail the second time.
+	# ignoring the result is easier than testing that it was necessary
+	# in the first place
+	ip link set eth0 up
+	# let the phy stabilize the link ?
+	sleep 1
+	ip addr add $ipaddr/$netmask dev eth0
+	echo "readcfg: tftp ${serverip}:${configurationname}"
+	tftp -g -r ${configurationname} -l "${TFTPCFG}" ${serverip} || fail_reboot "readcfg: tftp ${serverip}/${configurationname} failed"
+	/usr/sbin/modemconfigtool read "${TFTPCFG}" >> "$TMPCFG" || fail_reboot "readcfg: merge ${TFTPCFG} failed"
+	rm -f "${TFTPCFG}"
+	# TODO
+	ip link set eth0 down
+	ip addr flush eth0
+	;;
+*)
+	echo "unknown modem type '$MODEMNAME'"
+	exit 1
+	;;
+esac
+
+# strip ' from the cfg file
+sed -i -e "s/^\([^=]*\)='\(.*\)'$/\1=\2/g" "${TMPCFG}"
+# atomic copy
+mv "$TMPCFG" "/var/state/cfg"

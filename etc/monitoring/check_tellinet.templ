@@ -1,0 +1,8 @@
+name=tellinet
+program=/usr/local/bin/check_tellinet.sh
+type=program
+timeout=%WDTIMEOUTSHORT%
+cron="%MINUTES% * * * *"
+retries=%WDRETRIES%
+cycle=%WDCYCLE%
+onfailure="/usr/local/bin/log2flashandreboot.sh tellinet"

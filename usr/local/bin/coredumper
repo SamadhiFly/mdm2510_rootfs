@@ -1,0 +1,59 @@
+#!/bin/sh
+
+#
+# sysctl -w kernel.core_pattern='|/bin/core-dump-handler.sh -e=%e -p=%p -s=%s -t=%t -d=/tmp/coredumps'
+#
+
+PATH="/bin:/sbin:/usr/bin:/usr/sbin"
+
+umask 0177
+
+DIRECTORY="/tmp/coredumps"
+
+for i in "$@"
+do
+case $i in
+    -e=*|--exe-name=*)
+        EXE_NAME="${i#*=}"; shift
+    ;;
+    -p=*|--pid=*)
+        REAL_PID="${i#*=}"; shift
+    ;;
+    -s=*|--signal=*)
+        SIGNAL="${i#*=}"; shift
+    ;;
+    -t=*|--timestamp=*)
+        TS="${i#*=}"; shift
+    ;;
+    -d=*|--dir=*)
+        DIRECTORY="${i#*=}"; shift
+    ;;
+esac
+done
+
+CORE_GZIP_ARCHIVE="${DIRECTORY}/dump-${TS}-${EXE_NAME}-${REAL_PID}-${SIGNAL}.core-dump.gz"
+CORE_INFO_FILE="${DIRECTORY}/dump-${TS}-${EXE_NAME}-${REAL_PID}-${SIGNAL}.core-info.txt"
+if [[ ! -d "${DIRECTORY}" ]]; then
+    mkdir -p "${DIRECTORY}"
+    chown root:root "${DIRECTORY}"
+    chmod 0755 "${DIRECTORY}"
+fi
+
+
+# export thread info for process
+touch "${CORE_INFO_FILE}"
+for f in /proc/${REAL_PID}/task/*; do
+    if [ -d "$f" ]; then
+        THREAD_NAME=$(basename $f)
+        # $f is a directory
+        echo "================= THREAD DATA:  << ${THREAD_NAME} << =================" >> ${CORE_INFO_FILE}
+        cat "${f}/status" >> ${CORE_INFO_FILE}
+        echo "================= END OF DATA:  << ${THREAD_NAME} << =================" >> ${CORE_INFO_FILE}
+    fi
+done
+
+chmod 644 ${CORE_INFO_FILE}
+
+# archive coredump
+gzip -9 > "${CORE_GZIP_ARCHIVE}"
+chmod 644 ${CORE_GZIP_ARCHIVE}

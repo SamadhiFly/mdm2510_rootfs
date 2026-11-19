@@ -1,0 +1,135 @@
+#!/bin/sh
+shiftval()  {
+  nextval=$1
+  shift
+  val=$*
+}
+
+while getopts "ld" o; do
+  case "$o" in
+    d)
+      differential=1
+      ;;
+    l)
+      logoutput=1
+      ;;
+    [?])
+      break
+      ;;
+  esac
+done
+
+#Inter-|   Receive                                                |  Transmit
+# face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+#  eth0:  575279    6865    0    0    0     0          0         0      170       3    0    0    0     0       0          0
+#  eth1:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+#    lo:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+# modem:    1764       9    0    0    0     0          0         0      694       9    1    1    0     0       0          0
+
+estats=`sed -n 's/ *eth0: *\([0-9][0-9 ]*\)/\1/p' /proc/net/dev`
+mstats=`sed -n 's/ *modem: *\([0-9][0-9 ]*\)/\1/p' /proc/net/dev`
+shiftval $estats
+erxbytes=$nextval
+shiftval $val
+erxpackets=$nextval
+shiftval $val
+erxerrs=$nextval
+shiftval $val
+erxdrop=$nextval
+shiftval $val
+shiftval $val
+shiftval $val
+shiftval $val
+shiftval $val
+etxbytes=$nextval
+shiftval $val
+etxpackets=$nextval
+shiftval $val
+etxerrs=$nextval
+shiftval $val
+etxdrop=$nextval
+
+shiftval $mstats
+mrxbytes=$nextval
+shiftval $val
+mrxpackets=$nextval
+shiftval $val
+mrxerrs=$nextval
+shiftval $val
+mrxdrop=$nextval
+shiftval $val
+shiftval $val
+shiftval $val
+shiftval $val
+shiftval $val
+mtxbytes=$nextval
+shiftval $val
+mtxpackets=$nextval
+shiftval $val
+mtxerrs=$nextval
+shiftval $val
+mtxdrop=$nextval
+
+if [ "$differential" = 1 ]; then
+  derxbytes=0
+  derxpackets=0
+  derxerrs=0
+  derxdrop=0
+  detxbytes=0
+  detxpackets=0
+  detxerrs=0
+  detxdrop=0
+  dmrxbytes=0
+  dmrxpackets=0
+  dmrxerrs=0
+  dmrxdrop=0
+  dmtxbytes=0
+  dmtxpackets=0
+  dmtxerrs=0
+  dmtxdrop=0
+  if [ -e "/var/state/perfcounters" ]; then
+    . /var/state/perfcounters
+  fi
+  echo "derxbytes=$erxbytes" > /var/state/perfcounters
+  echo "derxpackets=$erxpackets" >> /var/state/perfcounters
+  echo "derxerrs=$erxerrs" >> /var/state/perfcounters
+  echo "derxdrop=$erxdrop" >> /var/state/perfcounters
+  echo "detxbytes=$etxbytes" >> /var/state/perfcounters
+  echo "detxpackets=$etxpackets" >> /var/state/perfcounters
+  echo "detxerrs=$etxerrs" >> /var/state/perfcounters
+  echo "detxdrop=$etxdrop" >> /var/state/perfcounters
+  echo "dmrxbytes=$mrxbytes" >> /var/state/perfcounters
+  echo "dmrxpackets=$mrxpackets" >> /var/state/perfcounters
+  echo "dmrxerrs=$mrxerrs" >> /var/state/perfcounters
+  echo "dmrxdrop=$mrxdrop" >> /var/state/perfcounters
+  echo "dmtxbytes=$mtxbytes" >> /var/state/perfcounters
+  echo "dmtxpackets=$mtxpackets" >> /var/state/perfcounters
+  echo "dmtxerrs=$mtxerrs" >> /var/state/perfcounters
+  echo "dmtxdrop=$mtxdrop" >> /var/state/perfcounters
+  let "derxbytes=$erxbytes-$derxbytes"
+  let "derxpackets=$erxpackets-$derxpackets"
+  let "derxerrs=$erxerrs-$derxerrs"
+  let "derxdrop=$erxdrop-$derxdrop"
+  let "detxbytes=$etxbytes-$detxbytes"
+  let "detxpackets=$etxpackets-$detxpackets"
+  let "detxerrs=$etxerrs-$detxerrs"
+  let "detxdrop=$etxdrop-$detxdrop"
+  let "dmrxbytes=$mrxbytes-$dmrxbytes"
+  let "dmrxpackets=$mrxpackets-$dmrxpackets"
+  let "dmrxerrs=$mrxerrs-$dmrxerrs"
+  let "dmrxdrop=$mrxdrop-$dmrxdrop"
+  let "dmtxbytes=$mtxbytes-$dmtxbytes"
+  let "dmtxpackets=$mtxpackets-$dmtxpackets"
+  let "dmtxerrs=$mtxerrs-$dmtxerrs"
+  let "dmtxdrop=$mtxdrop-$dmtxdrop"
+fi
+
+export erxbytes erxpackets erxerrs erxdrop etxbytes etxpackets etxerrs etxdrop
+export mrxbytes mrxpackets mrxerrs mrxdrop mtxbytes mtxpackets mtxerrs mtxdrop
+export derxbytes derxpackets derxerrs derxdrop detxbytes detxpackets detxerrs detxdrop
+export dmrxbytes dmrxpackets dmrxerrs dmrxdrop dmtxbytes dmtxpackets dmtxerrs dmtxdrop
+
+if [ "$logoutput" = 1 ]; then
+  logger -t perf -p user.info "eth0: $erxbytes $erxpackets $erxerrs $erxdrop $etxbytes $etxpackets $etxerrs $etxdrop $derxbytes $derxpackets $derxerrs $derxdrop $detxbytes $detxpackets $detxerrs $detxdrop"
+  logger -t perf -p user.info "modem: $mrxbytes $mrxpackets $mrxerrs $mrxdrop $mtxbytes $mtxpackets $mtxerrs $mtxdrop $dmrxbytes $dmrxpackets $dmrxerrs $dmrxdrop $dmtxbytes $dmtxpackets $dmtxerrs $dmtxdrop"
+fi

@@ -1,0 +1,130 @@
+
+source /sbin/env_processing.source
+
+set -e 
+
+trap 'cleanup || true' EXIT
+
+cleanup()
+{
+    test -n "${TMPDIR}" && test -d ${TMPDIR} && rm -rf ${TMPDIR}
+}
+
+die() {
+    >&2 echo Error: $@
+    exit 1
+}
+
+create_tempdir()
+{
+    TMPDIR=$(mktemp -d /root/installer.XXXXXX)
+}
+
+get_image_info()
+{
+	local filename=$1
+
+	mkimage.sh list ${filename} || die "corrupt uImage"
+}
+
+tonum()
+{
+	echo 0x0$1 | sed 's/^0x0\([0-9a-fA-F]*\).*/0x0\1/'
+}
+
+format_version()
+{
+	sed -n 's/^Image Name:.*uImage\(..\)\(..\)\(..\)\(..\)hwid\(....\)hwmask\(....\)$/\1 \2 \3 \4/p' | while read a b c d; do
+	printf "%d.%d.%d.%d" $(tonum $a) $(tonum $b) $(tonum $c) $(tonum $d) || die "Can not format version"
+	done
+}
+
+extract_hwid_mask()
+{
+	sed -n 's/^Image Name:.*uImage\(..\)\(..\)\(..\)\(..\)hwid\(....\)hwmask\(....\)$/0x\5 0x\6/p'
+}
+
+check_product()
+{
+	local device_hwid=$1
+	local installer_hwid=$2
+	local installer_hwmask=$3
+
+	test $(((device_hwid ^ installer_hwid) & installer_hwmask)) -eq 0
+}
+
+version_info_installer()
+{
+	local filename=$1
+
+	get_image_info ${filename} | format_version
+}
+
+validate_installer()
+{
+	local filename=$1
+
+	# check if the file is a mkimage script container
+	magic=$(hexdump -n 4 -e '4/1 "%02x"' ${filename})
+	imagetype=$(hexdump -s 30 -n 1 -e '1/1 "%02x"' ${filename})
+
+	[ "$magic" = "27051956" -a "$imagetype" = "06" ] || die "Invalid image type"
+
+	mkimage.sh verify ${filename} || die "Invalid installer image"
+}
+
+is_compatible_installer()
+{
+	local filename=$1
+	local device_hwid=$2
+
+	check_product ${device_hwid} $(get_image_info ${filename} | extract_hwid_mask) || die "Incompatible installer"
+}
+
+select_legacy_bank()
+{
+	local running_activebuild=$(get_cmdline_var activebuild)
+	echo $((1-running_activebuild))
+}
+
+extract_install_script_and_execute()
+{
+	local filename=$1
+	local legacy_bank=$(select_legacy_bank)
+
+	create_tempdir
+
+    # script container, after the mkimage header, the (padded) lengths of the subcomponents are given
+    scriptsize=$(hexdump -s 64 -n 4 -e '4/1 "%02x"' ${filename})
+    scriptsize=$(printf "%d\n" 0x${scriptsize})
+    scriptfile=${TMPDIR}/upgradescript
+    # find the start of the script
+    scriptstart=68
+    size=$(hexdump -s ${scriptstart} -n 4 -e '4/1 "%02x"' ${filename})
+    while [ $size != "00000000" ]
+    do
+        scriptstart=$((scriptstart+4))
+        size=$(hexdump -s ${scriptstart} -n 4 -e '4/1 "%02x"' ${filename})
+    done
+    scriptstart=$((scriptstart+4))
+    # copy the script to a seperate file
+    dd bs=1 skip=${scriptstart} count=${scriptsize} if=${filename} of=${scriptfile}
+
+    # clear both passive devices
+    /sbin/personalities/dlg/clear_passive_versions.sh
+
+    # execute
+    sh ${scriptfile} ${filename} ${legacy_bank} || die "Installation failed"
+
+}
+
+do_install()
+{
+	local filename=$1
+	local device_hwid=$2
+
+	if is_compatible_installer ${filename} ${device_hwid}; then
+		extract_install_script_and_execute ${filename}
+	fi
+}
+

@@ -1,0 +1,10 @@
+#!/bin/sh
+
+change_var() {
+    sed -i "s#^$1=.*#$1=$2#" /var/state/cfg
+}
+
+change_var "moob_enabled" "0"
+change_var "moob_config_valid" "0"
+
+

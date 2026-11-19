@@ -1,0 +1,26 @@
+#!/bin/sh
+tmpfile="/tmp/tmp..$$"
+retval=1 #default error
+
+# clear data from previous run
+if [ -f /var/state/test_fail_phys ]; then
+    rm /var/state/test_fail_phys
+fi
+
+# Verify demod lock
+
+#get the state
+/usr/local/bin/s3p getstate > ${tmpfile}
+
+result=`sed -n "s/^rx_demod_lock_state: \([01]\)$/\1/p" ${tmpfile}`
+if [ "${result}" = 1 ]; then
+	# modulator is locked
+	retval=0 #success
+#	echo "receiver is locked" >> /var/state/test_fail_phys
+else
+	echo "no demodulator lock" >> /var/state/test_fail_phys
+fi
+
+rm $tmpfile
+
+return $retval

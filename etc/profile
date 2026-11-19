@@ -1,0 +1,14 @@
+case ":$PATH:" in
+    *":/sbin:"*) :;;
+    *) PATH="/sbin:$PATH" ;;
+esac 
+case ":$PATH:" in
+    *":/usr/sbin:"*) :;;
+    *) PATH="/usr/sbin:$PATH" ;;
+esac 
+PATH=$PATH:/usr/local/bin:/usr/local/sbin
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+export PATH LD_LIBRARY_PATH
+alias ll='ls -l'
+export PS1='$PWD> '
+alias cli='clish -u newtec'

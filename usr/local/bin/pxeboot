@@ -1,0 +1,34 @@
+#!/bin/sh
+
+PXE_IF=eth0
+PXE_SUBNET=169.254.0.248/29
+PXE_MB_IPADDR=169.254.0.249
+PXE_SUBNET_PREFIX=29
+PXE_ADDIN_IPRANGE=169.254.0.250,169.254.0.251 # range must be at least 2: miniITX requests 2 ip addresses
+PXE_PID_FILE=/var/run/pxeboot.pid
+PXE_CONF_FILE=/tmp/pxeboot.conf
+PXE_LEASES_FILE=/tmp/pxeboot.leases
+
+pxeboot_start()
+{
+    logger -t $0 -p daemon.info "pxeboot"
+    ip addr add ${PXE_MB_IPADDR}/${PXE_SUBNET_PREFIX} dev ${PXE_IF}
+    ip link set ${PXE_IF} up
+
+    echo "interface=$PXE_IF" > ${PXE_CONF_FILE}
+    echo "dhcp-range=eth0,${PXE_ADDIN_IPRANGE},2m" >> ${PXE_CONF_FILE}
+    echo "dhcp-boot=pxeboot.bzImage" >> ${PXE_CONF_FILE}
+    echo "enable-tftp" >> ${PXE_CONF_FILE}
+    echo "tftp-root=/tftpboot" >> ${PXE_CONF_FILE}
+
+    dnsmasq --quiet-dhcp -C ${PXE_CONF_FILE} -l ${PXE_LEASES_FILE} --pid-file=${PXE_PID_FILE}
+}
+
+pxeboot_stop()
+{
+    logger -t $0 -p daemon.info "pxeboot"
+    ip addr del ${PXE_MB_IPADDR}/${PXE_SUBNET_PREFIX} dev ${PXE_IF}
+    kill `cat ${PXE_PID_FILE}`
+    rm -f ${PXE_CONF_FILE} ${PXE_LEASES_FILE}
+}
+

@@ -1,0 +1,27 @@
+#!/bin/sh
+
+source /sbin/env_processing.source
+
+set -e
+trap 'cleanup' EXIT
+
+cleanup() {
+	release_config_lock
+}
+
+active_version=$(/sbin/personalities/dlg/versioninfo_slot.sh active | cut -d' ' -f1)
+max_filesize=$(printf "%d" 0x$(grep '"img0"' /proc/mtd | cut -d ' ' -f 2))
+take_config_lock
+grep -e '^manufID=' \
+     -e '^hardwareID=' \
+     -e '^upgradeSignalisationIP=' \
+     -e '^upgradeSignalisationPort=' \
+  /var/state/cfg > /etc/swdownload.conf
+release_config_lock
+
+tee -a /etc/swdownload.conf > /dev/null <<EOF
+max_filesize=${max_filesize}
+active_version=${active_version}
+passive_version_cmd="/usr/local/bin/get_passive_version"
+EOF
+

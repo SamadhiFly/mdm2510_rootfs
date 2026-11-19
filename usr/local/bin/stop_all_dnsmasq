@@ -1,0 +1,23 @@
+#!/bin/sh
+#set -e -x
+
+if [ $# -lt 3 ]; then
+  echo "usage: $0 <filename> <version> <rule marker>"
+  exit 1
+fi
+
+if ls /var/run/dnsmasq.pid* &> /dev/null; then
+    kill `cat /var/run/dnsmasq.pid*`
+    wait_count=0
+    #wait until dnsmasq really died
+    while [ $wait_count -lt 50 -a $(pidof dnsmasq) ]; do
+      usleep 100000
+      wait_count=$((wait_count+1))
+    done
+    rm -f /var/run/dnsmasq.pid*
+    rm -f /var/state/dnsmasq.leases*
+    rm -f /etc/dnsmasq/dnsmasq.conf*
+fi
+
+# Remove iptables rules that were added for the previous config
+ip6tables -t mangle  -S | grep -F $3 | sed 's/^-A //' | while read rule; do eval " ip6tables -t mangle -D $rule"; done

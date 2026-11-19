@@ -1,0 +1,62 @@
+#!/bin/sh
+tmpfile="/tmp/tmp..$$"
+retval=1 #default error
+
+if [ -z "$1" ]
+then
+    echo "usage: ./test_ping_test.sh <IP ADDRESS> [<PACKET SIZE>] [<NUMBER OF PINGS>]"> ${tmpfile}
+    tail -n 1 ${tmpfile} >> /var/state/test_fail_ping
+    return $retval
+fi
+
+/usr/local/bin/test_conn_state
+retval2=$?
+
+if [ "$retval2" != 0 ]; then
+    return $retval2
+fi
+
+if [ -z "$2" ]
+then
+    size=56 #default
+else
+    if [ $2 -le 65000 ]; then
+        size=$2
+    else
+        echo "usage: ./test_ping_test.sh, Max packet size is 65000"> ${tmpfile}
+        tail -n 1 ${tmpfile} >> /var/state/test_fail_ping
+        return $retval
+    fi
+fi
+
+if [ -z "$3" ]
+then
+    number=1 #default
+else
+    if [ $3 -le 1000000 ]; then
+        number=$3
+    else
+        echo "usage: ./test_ping_test.sh, Max count is 100"> ${tmpfile}
+        tail -n 1 ${tmpfile} >> /var/state/test_fail_ping
+        return $retval
+    fi
+fi
+
+/bin/ping -c $number -s $size -q $1 > ${tmpfile}
+
+# We send one packet out, test whether we get a packet back
+result=`sed -n "s/[0-9a-z ]*, \([0-9]*\) received.*/\1/p" ${tmpfile}`
+if [ "${result}" = "${number}" ]
+then
+    #       echo "ping test success" >> /var/state/test_fail_ping
+    retval=0 #success
+else
+    #       echo "packet loss is not 0%" >> /var/state/test_fail_ping
+    tail -n 2 ${tmpfile} >> /var/state/test_fail_ping
+fi
+
+tail -n 2 ${tmpfile} >> /var/state/test_output_ping
+
+rm ${tmpfile}
+
+return $retval

@@ -1,0 +1,10 @@
+#!/bin/sh
+
+local_debug_mode=`cat /var/state/debugmode`
+if [ "$local_debug_mode" = '1' ]; then
+  /usr/sbin/iptables -P INPUT ACCEPT
+  /usr/sbin/ip6tables -P INPUT ACCEPT
+else
+  /usr/sbin/iptables -P INPUT DROP
+  /usr/sbin/ip6tables -P INPUT DROP
+fi

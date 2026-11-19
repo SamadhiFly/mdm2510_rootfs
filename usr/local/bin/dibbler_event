@@ -1,0 +1,91 @@
+#!/bin/sh
+
+event="$1"
+log="/var/log/dibbler/dibbler-script.log"
+
+dump_parameters()
+{
+    echo "------------------------------------------------------"
+    echo " Dibbler event at $(date)"
+    echo "------------------------------------------------------"
+    echo "event:                ${event}"
+    echo "interface:            ${IFACE}"
+    echo "interface index:      ${IFINDEX}"
+    echo "remote address:       ${REMOTE_ADDR}"
+    echo "client message:       ${CLNT_MESSAGE}"
+    echo "server message:       ${SRV_MESSAGE}"
+    echo "address 1:            ${ADDR1}"
+    echo "address 1 pref. time: ${ADDR1PREF}"
+    echo "address 1 valid time: ${ADDR1VALID}"
+    echo "address 2:            ${ADDR2}"
+    echo "address 2 pref. time: ${ADDR2PREF}"
+    echo "address 2 valid time: ${ADDR2VALID}"
+    echo "prefix 1:             ${PREFIX1}"
+    echo "prefix 1 length:      ${PREFIX1LEN}"
+    echo "prefix 1 pref. time:  ${PREFIX1PREF}"
+    echo "prefix 1 valid time:  ${PREFIX1VALID}"
+    echo "prefix 2:             ${PREFIX2}"
+    echo "prefix 2 length:      ${PREFIX2LEN}"
+    echo "prefix 2 pref. time:  ${PREFIX2PREF}"
+    echo "prefix 2 valid time:  ${PREFIX2VALID}"
+    # ...
+    # these lists can go on, there is no parameter in this version ( dibbler 0.8.2)
+    # for number of addresses or prefixes
+    echo "All environment variables:"
+    env | sort
+    echo "------------------------------------------------------"
+    echo
+}
+
+handle_prefix_delegation()
+{
+    # check if prefix delegation involved
+    if [ "${SRV_MESSAGE}" == "REPLY" -a -n "${PREFIX1}" ]
+    then
+        echo "processing prefix delegation message"
+    else
+        return
+    fi
+
+    # check other essential parameters
+    if [ -z "${PREFIX1LEN}" -o -z "${IFACE}" -o -z "${REMOTE_ADDR}" ]
+    then
+        echo "Missing parameters for prefix delegation!"
+        return
+    fi
+
+    interface="${IFACE}"
+    subnet="${PREFIX1}/${PREFIX1LEN}"
+
+    # We are not sure the client is going to use its assigned address $ADDR1.
+    # Also, in update/delete/expire events, this is address is not necessarily available.
+    # We use the requesting address as gateway instead (link-local, or from previous stateless/statefull autoconfiguration)
+
+    gateway="${REMOTE_ADDR}"        
+
+    # To discuss: Moving iptables rules to modem network manager.
+    case "${event}" in
+        "add")
+            ip6tables -t filter -A FORWARD    -d "${subnet}" -j ACCEPT
+            ip6tables -t mangle -A PREROUTING -d "${subnet}" -j ACCEPT
+            ip -6 route add to "${subnet}" via "${gateway}" dev "${interface}"
+        ;;
+
+        "update")
+            ip -6 route replace to "${subnet}" via "${gateway}" dev "${interface}"
+        ;;
+
+        {"delete","expire"})
+            ip6tables -t filter -D FORWARD    -d "${subnet}" -j ACCEPT
+            ip6tables -t mangle -D PREROUTING -d "${subnet}" -j ACCEPT
+            ip -6 route del to "${subnet}" via "${gateway}" dev "${interface}"
+        ;;
+
+        *)
+        ;;
+    esac
+
+}
+
+dump_parameters >> ${log} 
+handle_prefix_delegation 2>&1 >> ${log}

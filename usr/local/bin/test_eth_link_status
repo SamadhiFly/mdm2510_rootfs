@@ -1,0 +1,31 @@
+#!/bin/sh
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+tmpfile="/tmp/tmp..$$"
+retval=1  #default error
+
+# Test the ethernet link status
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    link_status=`/usr/local/bin/cliclient RouterControllerGetLANTestResult -g RequestData.LinkStatus`
+    speed=`/usr/local/bin/cliclient RouterControllerGetLANTestResult -g RequestData.LinkSpeed`
+else
+    mii-diag eth0 > ${tmpfile}
+
+    link_status=`sed -n "/You have link beat, and everything is working OK./p" ${tmpfile}`
+    speed=`sed -n "s/^The autonegotiated media type is \([10]*baseT[x4]*-*[HFD]*\).*$/\1/p" ${tmpfile}`
+fi
+
+if [ -n "${link_status}" ]
+then
+	echo "link up, ${speed}" >> /var/state/test_fail_eth
+	echo "link up, ${speed}" >> /var/state/test_output_eth
+	retval=0 #success
+else
+	echo "link down" >> /var/state/test_fail_eth
+fi
+
+rm ${tmpfile}
+
+return $retval

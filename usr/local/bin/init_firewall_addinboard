@@ -1,0 +1,117 @@
+#!/bin/sh
+#set -e -x
+
+IPT="/usr/sbin/iptables"
+IP6T="/usr/sbin/ip6tables"
+keyComment="-m comment --comment init_firewall_addinboard"
+
+. /usr/local/bin/parse_var_state_cfg.sh
+. /usr/local/bin/ifcfg_local_mgmt.sh
+. /etc/parse_modem_netdev.sh
+
+parse_tellinet_on_addin_board
+parse_tellishape_on_addin_board
+
+get_syslogconfig() {
+ cfg_syslogmode=`sed -n "s/^syslogmode=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogport=`sed -n "s/^syslogport=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogaddr=`sed -n "s/^syslogaddr=\(.*\)$/\1/p" /var/state/cfg`
+}
+
+fw4() {
+    ################
+    # FILTER TABLE #
+    ################
+    # INPUT CHAIN
+    ${IPT} -P INPUT DROP
+
+    ${IPT} -A INPUT -i lo -j ACCEPT ${keyComment}
+	for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+		${IPT} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+	done
+
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p icmp -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p tcp --dport 80 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p tcp --dport 8000 -j ACCEPT ${keyComment} #Tellinet GUI
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p tcp --dport 11200 -j ACCEPT ${keyComment} #Tellishape GUI
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p tcp --dport 10250 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p udp --dport 123 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p tcp --dport 123 -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -m pkttype --pkt-type multicast -j ACCEPT ${keyComment}
+    ${IPT} -A INPUT -i ${LM_IF} -d ${LM_IPADDR} -p udp --dport 161 -j ACCEPT ${keyComment}
+
+    # allow an internal ping
+    ${IPT} -A INPUT -i eth0 -p icmp -j ACCEPT ${keyComment}
+
+    # FORWARD CHAIN
+    ${IPT} -P FORWARD DROP
+
+    # OUTPUT CHAIN
+    ${IPT} -A OUTPUT -p igmp -o tun2 -j DROP ${keyComment}
+    ${IPT} -A OUTPUT -p igmp -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+    ${IPT} -A OUTPUT -p icmp --icmp-type destination-unreachable -o tun2 -j DROP ${keyComment}
+    ${IPT} -A OUTPUT -s ${LM_IPADDR}/${LM_NETMASK} -o tun2 -j DROP ${keyComment}
+    ${IPT} -A OUTPUT -s 169.254.0.160/27 -o tun2 -j DROP ${keyComment}
+    ${IPT} -A OUTPUT -d ${cfg_syslogaddr} -p udp --dport ${cfg_syslogport} -o tun2 -j DROP ${keyComment}
+    ${IPT} -P OUTPUT ACCEPT
+}
+
+fw6() {
+    ################
+    # FILTER TABLE #
+    ################
+    # INPUT CHAIN
+    ${IP6T} -P INPUT DROP
+    ${IP6T} -A INPUT -i lo -j ACCEPT ${keyComment}
+	for demod in ${modem_netdev_sig_demod} ${modem_netdev_sig_demods}; do
+		${IP6T} -A INPUT -i ${demod} -j ACCEPT ${keyComment}
+	done
+
+    ${IP6T} -A INPUT -i ${LM_IF} -p icmpv6 -j ACCEPT # no '-d' because of NDP with link-local addresses
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p tcp --dport 80 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p tcp --dport 8000 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p tcp --dport 11200 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p tcp --dport 10250 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p udp --dport 123 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p tcp --dport 123 -j ACCEPT ${keyComment}
+    ${IP6T} -A INPUT -i ${LM_IF} -d ${LM_IP6ADDR} -p udp --dport 161 -j ACCEPT ${keyComment}
+
+    ${IP6T} -A INPUT -p icmpv6 -j ACCEPT # for NDP with link-local addresses, see also SMS-5378
+
+    # FORWARD CHAIN
+    ${IP6T} -P FORWARD DROP
+
+    # OUTPUT CHAIN
+    ${IP6T} -A OUTPUT -o ${modem_netdev_generic_mod} -j DROP  ${keyComment}
+    ${IP6T} -A OUTPUT -p igmp -o tun2 -j DROP ${keyComment}
+    ${IP6T} -A OUTPUT -p igmp -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+    ${IP6T} -A OUTPUT -p icmpv6 --icmpv6-type destination-unreachable -o tun2 -j DROP ${keyComment}
+    ${IP6T} -A OUTPUT -s ${LM_IP6ADDR}/${LM_IP6PREFIX} -o tun2 -j DROP ${keyComment}
+    ${IP6T} -A OUTPUT -s fd00:5242::/64 -o tun2 -j DROP ${keyComment}
+    ${IP6T} -P OUTPUT ACCEPT
+}
+
+lm_port_forwarding() {
+    port=$1
+    
+    # NAT
+    ${IPT} -t nat -A POSTROUTING -p tcp -o ${LM_IF} -d ${RB_LM_BRIDGE_IPADDR} --dport ${port} -j MASQUERADE ${keyComment}
+    ${IPT} -t nat -A PREROUTING -p tcp --dport ${port} -j DNAT --to-destination ${RB_LM_BRIDGE_IPADDR}:${port} ${keyComment}
+
+    # FORWARD CHAIN
+    ${IPT} -A FORWARD -p tcp -o ${LM_IF} -d ${RB_LM_BRIDGE_IPADDR} --dport ${port} -j ACCEPT ${keyComment}
+    ${IPT} -A FORWARD -p tcp -i ${LM_IF} -o eth0.3004 -s ${RB_LM_BRIDGE_IPADDR} --sport ${port} -j ACCEPT ${keyComment}
+}
+
+get_syslogconfig
+fw4
+fw6
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+    lm_port_forwarding 8000
+fi
+
+if [ "${tellishape_on_addin_board}" -eq 1 ]; then
+    lm_port_forwarding 11200 
+fi
+

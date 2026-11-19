@@ -1,0 +1,10 @@
+#!/bin/sh
+retval=1 #default error
+
+state=`/usr/local/bin/modem_controller_client getModemStateData | sed -n "s/Overallstate=\([a-zA-Z ]*\)/\1/p"`
+
+if [ $state = "OperationalModemState" ]; then
+	retval=0 #success
+fi
+
+return $retval

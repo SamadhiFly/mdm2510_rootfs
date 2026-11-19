@@ -1,0 +1,2 @@
+#!/bin/sh
+echo $* > /dev/modem_leds 2>&1

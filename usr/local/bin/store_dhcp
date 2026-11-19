@@ -1,0 +1,14 @@
+#!/bin/sh
+# Stores the dhcp enabled value (0 or 1) in the flash config, only if it differs from the current value
+
+filename=$1
+version=$2
+
+current_value=`sed -n 's/^dhcp_enabled=\([01]\)/\1/p' /var/state/cfg`
+if [ -z "$current_value" ]; then
+    echo "dhcp_enabled=${3}" >> /var/state/cfg
+    /usr/local/bin/writecfg
+elif [ "$current_value" != "${3}" ]; then
+    sed -i "s#^dhcp_enabled=.*#dhcp_enabled=${3}#" /var/state/cfg
+    /usr/local/bin/writecfg
+fi

@@ -1,0 +1,7 @@
+name=swdownload 
+type=process
+program=/usr/local/bin/swdownload
+cron="%MINUTES% * * * *"
+retries=%WDRETRIES%
+cycle=%WDCYCLE%
+onfailure="/usr/local/bin/log2flashandreboot.sh swdownload"

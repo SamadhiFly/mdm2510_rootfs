@@ -1,0 +1,524 @@
+#!/bin/sh
+ME=$(basename $0)
+
+lockFd=none
+for fd in $(seq 0 200) ; do
+    [ ! -e /proc/$$/fd/${fd} ] && lockFd=${fd} && break
+done
+
+if [ ${lockFd} = "none" ]; then
+    logger -t "$ME" -p user.err -s "Failed to create gui_diagnostic_report.lock! Will continue without it."
+else
+    # can't execute the exec directly, because the ash doesn't understand it correctly.
+    eval "exec ${lockFd}<>/var/run/gui_diagnostic_report.lock"
+    if ! flock -x --nonblock ${lockFd} ; then
+        logger -t "$ME" -s "Fetching Diagnostic Report not allowed! (already in progress)"
+        exit 1
+    fi
+fi
+# prevent stderr corrupting the http response
+exec 2>/dev/null
+
+. /usr/local/bin/parse_var_state_cfg.sh
+
+# the file that will gather all the data
+OUTPUT_FILE=/var/tmp/device_info.log
+
+# reads config informations
+read_config() {
+    ntchwid=$(sed -n "s/^ntchwid=\(.*\)$/\1/p" /var/state/cfg)
+    ntcserial=$(sed -n "s/^ntcserial=\(.*\)$/\1/p" /var/state/cfg)
+    ntccode=$(sed -n "s/^ntccode=\(.*\)$/\1/p" /var/state/cfg)
+    ntcpasswd=$(sed -n "s/^ntcpasswd=\(.*\)$/\1/p" /var/state/cfg)
+    ntcversion=$(sed -n "s/^ntcversion=\(.*\)$/\1/p" /var/state/cfg)
+    firmware_id=$(sed -n "s/^firmware_id: \(.*\)$/\1/p" /etc/version)
+    firmware_nbr=$(sed -n "s/^firmware_id: \(.*\)$/\1/p" /etc/version | cut -d "." -f 2)
+    firmware_build_tag=$(sed -n "s/^firmware_build_tag: \(.*\)$/\1/p" /etc/version)
+    config_id=$(sed -n "s/^version_uboot_config=\(.*\)$/\1/p" /var/state/cfg)
+    config_nbr=$(sed -n "s/^version_uboot_config=\(.*\)$/\1/p" /var/state/cfg | cut -d "." -f 2)
+    pcb_version=$(sed -n "s/^pcbarev=\(.*\)\.\(.*\)$/\1/p" /var/state/cfg)
+    bom_version=$(sed -n "s/^pcbarev=\(.*\)\.\(.*\)$/\2/p" /var/state/cfg)
+    logging_persistence=$(sed -n "s/^logging_persistence=\(.*\)$/\1/p" /var/state/cfg)
+}
+
+get_json_value()
+{
+    echo $1 | jq -r .$2
+}
+
+read_device_information() {
+    deviceInfoData=$(/usr/local/bin/cliclient GetDeviceInformation)
+    swcurrentmp=$(get_json_value "${deviceInfoData}" "RequestData.Software.CurrentSoftwareIsMPSupported")
+    installedpersonalities=$(get_json_value "${deviceInfoData}" "RequestData.Software.InstalledPersonalities?|@csv")
+    installedimages=$(get_json_value "${deviceInfoData}" "RequestData.Software.InstalledImages[]?")
+}
+
+# handles logging of data to file
+log_line() {
+    echo "$1" >>$OUTPUT_FILE
+}
+log_linef() {
+    printf "$1" "$2" >>$OUTPUT_FILE
+}
+
+prepare_gxt_files_for_diagnostic_report() {
+  if [ -d "/mnt/sd/gxt/" ]; then
+    zip -rq /var/tmp/gxt.zip /mnt/sd/gxt/
+  fi
+  if [ -d "/mnt/sd/gxt/" ]; then
+    zip -rq /var/tmp/candidate-gxt.zip /mnt/sd/candidate-gxt/
+  fi
+}
+
+remove_file(){
+  if [ -f $1 ]; then
+    rm -f $1 || true
+  fi
+}
+
+. /var/www/cgi-bin/gui_short_diagnostic_report >/var/tmp/diag_report_ascii
+
+if [ -f $OUTPUT_FILE ]; then
+    rm -f $OUTPUT_FILE || true
+fi
+touch $OUTPUT_FILE
+
+grep -v "Content-type: text/plain" /var/tmp/diag_report_ascii >> $OUTPUT_FILE || true
+rm /var/tmp/diag_report_ascii
+log_line
+log_line "++++++++++++=========++++++++++++++++++++++ "
+log_line "+  Extended TERMINAL  DIAGNOSTIC  REPORT  + "
+log_line "+++++++++++++++++++++=========+++++++++++++ "
+log_line
+log_line "==================================="
+log_line "1. Terminal Firmware + FPGA version"
+log_line "==================================="
+read_config
+read_device_information
+log_line "name: $(hostname)"
+
+cat /etc/version 2>/dev/null >>$OUTPUT_FILE
+if [ -f "/var/state/acu_status" ]; then
+    cat /var/state/acu_status 2>/dev/null >>$OUTPUT_FILE
+fi
+
+config_version=$(/usr/local/bin/cliclient GetTmsInformation -g RequestData.Version)
+if [ -n "$config_version" ]; then
+    log_line "TMS_config_version: ${config_version}"
+fi
+log_line "productid: ${ntchwid}.${firmware_nbr}.${config_nbr}"
+log_line "UbootConfigId: ${config_id}"
+log_line "ntchwid: ${ntchwid}"
+log_line "ntcversion: ${ntcversion}"
+log_line "ntcserial: ${ntcserial}"
+log_line "ntccode: ${ntccode}"
+log_line "pcbversion: ${pcb_version}"
+log_line "bomrevision: R${bom_version}"
+if [ -n "$firmware_build_tag" ]; then
+    log_line "firmware_build_tag: ${firmware_build_tag}"
+fi
+log_line "uptime: $(cut -d ' ' -f 1 /proc/uptime)"
+log_line "date: $(date -uR)"
+log_line
+
+log_line "FPGA version info"
+/usr/local/bin/clish -u newtec -c debug device fpgaversions >>$OUTPUT_FILE 2>&1
+log_line "NIOS version info"
+/usr/local/bin/clish -u newtec -c debug device niosversions >>$OUTPUT_FILE 2>&1
+log_line
+bootloaderVersion=$(/usr/local/bin/cliclient GetBootloaderVersion -g RequestData)
+if [ ! -z "$bootloaderVersion" ]; then
+    log_line "Bootloader version"
+    log_line "$bootloaderVersion"
+fi
+log_line
+
+if [ "$swcurrentmp" == "true" ]; then
+  log_linef "Installed Personalities: %s\n" "$installedpersonalities"
+  log_linef "Installed Images:\n%s\n" "$installedimages"
+  log_line
+fi
+
+log_line "================================="
+log_line "2. Terminal general status report "
+log_line "================================= "
+/usr/local/bin/s3p getstate >>$OUTPUT_FILE 2>&1
+/usr/local/bin/cliclient GetPhysicalLayerState 2>&1 | sed '/\"/!d; /Request\|Success/d; s/\t\|\"\|,\s*$//g; s/\(.*:\)\s*$/\n\1\n---------------------------/g' >>$OUTPUT_FILE
+log_line
+log_line "Software Download"
+log_line "-----------------"
+cat /var/state/downloadreport 2>/dev/null >>$OUTPUT_FILE
+log_line
+log_line "MC State"
+log_line "--------"
+/usr/local/bin/s3p mcstate -c >>$OUTPUT_FILE 2>&1
+log_line
+log_line "CP State"
+log_line "--------"
+/usr/local/bin/s3p cpstate -c >>$OUTPUT_FILE 2>&1
+log_line
+alarms=$(/usr/local/bin/cliclient GetAlarms 0 -g RequestData.Alarms)
+if [ ! -z "$alarms" ]; then
+    log_line "Alarms: $alarms"
+    log_line
+fi
+disabledModcods=$(/usr/local/bin/cliclient GetDemodModCodConfiguration 2 | grep 'ModCod\|Status' | awk -F: '{ print $2 }' | sed 's/\"//g' | tr ',' ':' | sed 'N;s/\n//' | grep -v Enabled)
+if [ ! -z "$disabledModcods" ]; then
+    log_line "Disabled Oxford Modcods"
+    log_line "$disabledModcods"
+    log_line
+fi
+
+log_line "==============================="
+log_line "3. Internal modem driver states"
+log_line "==============================="
+/usr/local/bin/s3p getmodemdata >> $OUTPUT_FILE 2>&1
+log_line
+
+log_line "==============================="
+log_line "4. Demod statistics"
+log_line "==============================="
+demodStats=$(/usr/local/bin/cliclient GetDemodulatorStatistics)
+genStats=$(echo "$demodStats" | grep "\<CCM\>\|\<CNI\>\|\<CorrectedCNI\>\|\<CurrentModCod\>\|\<DemodLock\>\|\<DummyFrames\>\|\<PhysicalFrames\>\|\<Signal\>\|\<LinkMargin\>\|\<PhaseNoiseMargin\>" | sed 's/\"//g' | sed 's/,$//g' | sed -e 's/^[ \t]*//')
+log_line "$genStats"
+bbfStuff=$(echo "$demodStats" | sed -n '/BBFrames/,/CCM/p; /BBFrames/q' | sed 's/\"//g' | sed 's/,$//g' | sed -e 's/^[ \t]*//')
+log_line "$bbfStuff"
+log_line "ModCods:"
+log_line "---------------------------------"
+modCod=$(echo "$demodStats" | sed -n '/ModCods/,/PhysicalFrames/p' | sed 's/\"//g' | sed 's/,$//g' | sed -e 's/^[ \t]*//' | grep '\<BBFrames\>\|\<DroppedBBFrames\>\|\<Enabled\>\|\<Id\>\|\<Name\>\|\<CND\>\|\<CD\>' | sed 'N;N;N;N;N;N;s/\n/ /g')
+log_line "$modCod"
+log_line
+
+log_line "==============================="
+log_line "4.1 Demod debug statistics"
+log_line "==============================="
+wbDemodDebugInfo=$(/bin/sh /usr/local/bin/dbg_wbd.sh 2>&1)
+log_line "$wbDemodDebugInfo"
+log_line
+
+log_line "==============================="
+log_line "5. ACM statistics"
+log_line "==============================="
+acmStats=$(/usr/local/bin/cliclient GetACMStatistics)
+genStats=$(echo "$acmStats" | grep "\<FeedbackInterval\>\|\<FeedbackIntervalLower\>\|\<ErrorAwarenessAcmMargin\>" | sed 's/\"//g' | sed 's/,$//g' | sed -e 's/^[ \t]*//')
+log_line "$genStats"
+log_line "ModCods:"
+log_line "---------------------------------"
+modCod=$(echo "$acmStats" | sed -n '/Modcods/,/RequestResult/p' | sed 's/\"//g' | sed 's/,$//g' | sed -e 's/^[ \t]*//' | grep '\<Id\>\|\<Name\>\|\<ACM_Down\>\|\<ACM_In\>\|\<DM_ML\>\|\<Enabled\>\|\<EsNo_Down\>\|\<EsNo_In\>\|\<Threshold\>' | sed 'N;N;N;N;N;N;N;N;s/\n/ /g')
+log_line "$modCod"
+log_line
+
+log_line "==============================="
+log_line "6. ACM internals"
+log_line "==============================="
+acmInternals=$(/usr/local/bin/clish -u newtec -c debug acm 0 internals)
+log_line "$acmInternals"
+log_line
+
+log_line "==================================="
+log_line "7. Layer 2 counters of modem driver"
+log_line "==================================="
+/usr/local/bin/s3p getcounters >>$OUTPUT_FILE 2>&1
+log_line
+
+log_line "================================= "
+log_line "8. Terminal initial configuration "
+log_line "================================= "
+cat /var/state/cfg 2>/dev/null | grep -v passwd | grep -v x509_cert | grep -v term_priv >>$OUTPUT_FILE
+log_line
+
+log_line "===================================== "
+log_line "9. Terminal operational configuration "
+log_line "===================================== "
+/usr/local/bin/cliclient GetLayer3Data -g RequestData.Layer3Data 2>&1 | grep -v "tellitec_key" >>$OUTPUT_FILE
+log_line
+
+log_line "===================="
+log_line "10. Running processes"
+log_line "===================="
+ps auxww >>$OUTPUT_FILE
+log_line
+
+log_line "======================="
+log_line "11. Ethernet link status "
+log_line "======================="
+/usr/sbin/ethtool eth0 2>/dev/null >>$OUTPUT_FILE
+#/usr/sbin/mii-diag -v eth0 >> $OUTPUT_FILE || true > /dev/null 2>&1 # throws and error that breaks the output
+log_line
+
+log_line "===================="
+log_line "12. Memory usage info"
+log_line "===================="
+cat /proc/meminfo 2>/dev/null >>$OUTPUT_FILE
+log_line
+
+log_line "========================="
+log_line "13. Network configuration"
+log_line "========================="
+log_line "a. IP interface Addresses "
+log_line "------------------------- "
+ip address >>$OUTPUT_FILE
+log_line
+
+log_line "b. Multicast Addresses "
+log_line "---------------------- "
+ip maddr show >>$OUTPUT_FILE
+log_line
+
+log_line "c. Ethernet ARP Cache"
+log_line "---------------------"
+cat /proc/net/arp >>$OUTPUT_FILE
+log_line
+
+log_line "d. Policy-Based Routing"
+log_line "-----------------------"
+ip rule >>$OUTPUT_FILE
+log_line
+
+log_line "e. Network Link "
+log_line "--------------- "
+ip link >>$OUTPUT_FILE
+log_line
+
+log_line "f. IP routing"
+log_line "-------------"
+# log_line "1. Table main "
+# ip route
+# log_line "2. Table 1 (Forwarding) "
+# ip route show table 1
+# log_line "3. Table 2 (TelliNet TCP Acceleration) "
+# ip route show table 2
+# log_line "4. Local "
+# ip route show table local
+# log_line "5. Multicast Routing "
+# ip mroute show
+# log_line
+log_line "1. Unicast routing "
+ip -4 route show table all >>$OUTPUT_FILE
+ip -6 route show table all >>$OUTPUT_FILE
+log_line "2. Multicast routing "
+ip mroute show >>$OUTPUT_FILE
+log_line
+
+log_line "g. IP tables"
+log_line "------------"
+log_line "1. Table FILTER "
+/usr/sbin/iptables -L -n --line-numbers -t filter -v >>$OUTPUT_FILE
+log_line
+log_line "2. Table MANGLE "
+/usr/sbin/iptables -L -n --line-numbers -t mangle -v >>$OUTPUT_FILE
+log_line
+log_line "3. Table NAT "
+/usr/sbin/iptables -L -n --line-numbers -t nat -v >>$OUTPUT_FILE
+log_line
+
+log_line "h. IP-6 tables"
+log_line "------------"
+log_line "1. Table FILTER "
+/usr/sbin/ip6tables -L -n --line-numbers -t filter -v >>$OUTPUT_FILE
+log_line
+log_line "2. Table MANGLE "
+/usr/sbin/ip6tables -L -n --line-numbers -t mangle -v >>$OUTPUT_FILE
+log_line
+
+log_line "i. ARP Tables"
+log_line "-------------"
+/sbin/arptables -L -n -v >>$OUTPUT_FILE
+log_line
+
+parse_tellinet_on_addin_board
+parse_tellishape_on_addin_board
+
+if [ "${tellinet_on_addin_board}" -ne 1 ]  || [ "${tellishape_on_addin_board}" -ne 1 ]; then
+    log_line "================================="
+    log_line "14. Tellitec-client configuration"
+    log_line "================================="
+fi
+if [ "${tellinet_on_addin_board}" -ne 1 ]; then
+    log_line "a. Tellinet client config "
+    log_line "------------------------- "
+    log_line "--- net-client.ini ---"
+    cat /etc/net-client.ini 2>/dev/null | grep -v user_key >> $OUTPUT_FILE
+    for ndfFile in $(ls /etc/tellishape_config/*.ndf 2>/dev/null | sort -r); do
+        log_line
+        log_line "--- `basename $ndfFile` ---"
+        cat $ndfFile >> $OUTPUT_FILE
+    done
+    log_line
+fi
+if [ "${tellishape_on_addin_board}" -ne 1 ] ; then
+    log_line "b. Tellishape client config "
+    log_line "--------------------------- "
+    log_line "1. Server config:"
+    if [ -f "/etc/tellishape_config/shape-server.ini" ]; then
+        cat /etc/tellishape_config/shape-server.ini 2>/dev/null >>$OUTPUT_FILE
+        log_line
+    else
+        log_line "file not present"
+    fi
+    log_line "2. Shaping tree: "
+    if [ -f "/etc/tellishape_config/Tellishape_1.sdf" ]; then
+        cat /etc/tellishape_config/Tellishape_1.sdf 2>/dev/null >>$OUTPUT_FILE
+        log_line
+    else
+        log_line "file not present"
+    fi
+fi
+
+log_line "=============== "
+log_line "15. DHCP leases "
+log_line "=============== "
+dhcpleases=$(/usr/local/bin/cliclient GetDHCPLeases -g RequestData.DHCPLeases)
+log_line "DHCPv4 Leases:"
+echo $dhcpleases | grep -o -E '"IPAddress" : "([0-9]{1,3}.){3}[0-9]{1,3}", "MacAddress" : "([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}"' >> $OUTPUT_FILE || true
+log_line "DHCPv6 Leases:"
+echo $dhcpleases | grep -o -E '"Duid" : "([0-9a-fA-F]{0,4}:)+[0-9a-fA-F]{0,4}", "IPAddress" : "([0-9a-fA-F]{0,4}:)+[0-9a-fA-F]{0,4}"' >> $OUTPUT_FILE || true
+
+log_line
+
+log_line "=========== "
+log_line "16. HW Info "
+log_line "=========== "
+log_line
+temperatures=$(/usr/local/bin/cliclient GetTemperatures | grep 'Name\|Value' | awk -F: '{ print $2 }' | sed 's/\"//g' | tr ',' ':' | sed 'N;s/\n//')
+if [ ! -z "$temperatures" ]; then
+    log_line "Temperatures"
+    log_line "$temperatures"
+    log_line
+fi
+powerSupplyStatus=$(/usr/local/bin/cliclient GetPowerSupplyStatus | grep 'Name\|Value' | awk -F: '{ print $2 }' | sed 's/\"//g' | tr ',' ':' | sed 'N;s/\n//')
+if [ ! -z "$powerSupplyStatus" ]; then
+    log_line "Power supply status"
+    log_line "$powerSupplyStatus"
+    log_line
+fi
+interfaceStatus=$(/usr/local/bin/cliclient GetInterfaceStatus | grep 'Name\|Status' | awk -F: '{ print $2 }' | sed 's/\"//g' | tr ',' ':' | sed 'N;s/\n//')
+if [ ! -z "$interfaceStatus" ]; then
+    log_line "Interface status"
+    log_line "$interfaceStatus"
+    log_line
+fi
+
+log_line "=============================="
+log_line "17. Demod Monitoring Log Files"
+log_line "=============================="
+for file in $(ls /tmp/logfiles/demodmonitor.* 2>/dev/null | sort -r); do
+    if [ -f $file ]; then
+        log_line "please check: $(basename $file) in archive"
+    fi
+done
+
+log_line "=============================="
+log_line "18. Internal Error Log Files"
+log_line "=============================="
+for file in $(ls /tmp/logfiles/InternalError.* 2>/dev/null | sort -r); do
+    if [ -f $file ]; then
+        log_line "please check: $(basename $file) in archive"
+    fi
+done
+
+log_line "====================="
+log_line "19. Terminal Log File"
+log_line "====================="
+log_line
+log_line " - for modem board log files please check main_board.log and main_board.log.xxx archives"
+
+routercontroller_supported=$(sed -n 's/^routercontroller_supported=\([1]\)/\1/p' /var/state/cfg)
+if [ -n "$routercontroller_supported" ]; then
+    log_line " - for router board log files please check router_board.log and router_board.log.xxx archives"
+    # Download the router board diagnostics file. It will be stored in /tmp/report.log
+    /usr/local/bin/cliclient RouterControllerGetDiagnosticReport >/dev/null 2>&1
+
+    log_line "==========================="
+    log_line "20. Segment4 / Router Board"
+    log_line "==========================="
+    log_line ""
+    log_line "================="
+    log_line "Segment4 settings"
+    log_line "================="
+    if [ -f "/mnt/config/segment4/vn0/config-2.0.json" ]; then
+        # config file is encrypted
+        /usr/local/bin/cliclient RouterControllerNMGet | grep -v "\"Key\"" | grep -v PskSecret >> $OUTPUT_FILE || true
+        log_line ""
+    else
+        log_line "file /mnt/config/segment4/vn0/config-2.0.json not present"
+    fi
+    if [ -f "/mnt/config/segment4/vn0/ipsec.json" ]; then
+        log_line "IPSec:"
+        # config file is encrypted
+        /usr/local/bin/cliclient GetIPSecConfiguration | grep -v PskSecret >> $OUTPUT_FILE || true
+        log_line ""
+    else
+        log_line "file /mnt/config/segment4/vn0/ipsec.json not present"
+    fi
+    log_line ""
+    log_line "============================="
+    log_line "Router Board Diagnostics File"
+    log_line "============================="
+    cat /tmp/report.log 2>/dev/null >> $OUTPUT_FILE
+    log_line ""
+fi
+
+log_line "=============="
+log_line "21. Monitoring"
+log_line "=============="
+if [ -d "/var/state/monitoring/" ]; then
+  log_line
+  find /var/state/monitoring/ >> $OUTPUT_FILE || true
+  # Abuse grep to get the file name and contents of any failure files
+  grep -r '.' /var/state/monitoring/state/ >> $OUTPUT_FILE || true
+else
+  log_line "Monitoring information is not available. Folder /var/state/monitoring/ does not exist!"
+fi
+
+log_line
+log_line "======="
+log_line "22. Ntp"
+log_line "======="
+log_line
+ntpq -pn -c rv >> $OUTPUT_FILE 2>&1
+
+log_line
+log_line "================"
+log_line "23. Modem Config"
+log_line "================"
+if [ -f "/var/state/modem_config" ]; then
+  cat /var/state/modem_config >> $OUTPUT_FILE
+else
+  log_line "Modem config is not available."
+fi
+
+log_line
+log_line "======================"
+log_line "24. SW Download config"
+log_line "======================"
+if [ -f "/etc/swdownload.conf" ]; then
+  cat /etc/swdownload.conf >> $OUTPUT_FILE
+else
+  log_line "SW download config is not available."
+fi
+
+# proceed with archiving
+echo "Status: 200 Success"
+echo "Content-Type: application/octet-stream"
+echo "Content-Disposition: attachment; filename=DR_${airmac//:}_$(date +%Y%m%d_%H%M%S).zip"
+echo
+
+# check if sdcard is supported for fetching files from that location
+if [ -e "/dev/mmcblk0p1" ]; then
+    #temporary zip gxt files to be included in the diagnostic report
+    prepare_gxt_files_for_diagnostic_report
+    if [ "$logging_persistence" = "1" ]; then
+      zip -rjq - $OUTPUT_FILE /mnt/sd/watchdog_logs* /mnt/sd/logs/* /tmp/logfiles/* /tmp/coredumps/* /var/tmp/gxt.zip /var/tmp/candidate-gxt.zip | cat
+    #if sd card is supported add also the gxt files regardless if the $logging_persistence is enabled or not
+    else
+      zip -rjq - $OUTPUT_FILE /mnt/sd/watchdog_logs* /tmp/logfiles/* /tmp/coredumps/* /var/tmp/gxt.zip /var/tmp/candidate-gxt.zip | cat
+    fi
+    #remove temporary gxt files
+    remove_file /var/tmp/gxt.zip
+    remove_file /var/tmp/candidate-gxt.zip
+else
+    zip -rjq - $OUTPUT_FILE /tmp/logfiles/* /tmp/coredumps/*  | cat
+fi
+
+rm $OUTPUT_FILE

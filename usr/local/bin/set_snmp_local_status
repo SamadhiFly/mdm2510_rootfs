@@ -1,0 +1,51 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+IPT="/usr/sbin/iptables"
+
+get_netconfig() {
+    #check if router controller is supported and not in bridged mode
+    if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+        eth0_ipaddr=${LM_IPADDR}
+    else
+        eth0_ipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+    fi
+    # Mgmt network
+    ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+    ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+    ethmgmtnet=`ipcalc -sn ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+}
+
+# Main
+if [ $# -lt 2 ]; then
+  echo "usage: set_snmp_local_status <enable> <rule key>"
+  echo "        The <rule key> is a unique key identifying the iptables rules that were added to implement firewalling."
+  echo "        This key probably looks something like *IPTKEY:FW*."
+  exit 1
+fi
+
+enable="${1}"
+key=$2
+keyComment="-m comment --comment ${key}"
+
+get_netconfig
+
+# Remove previous configuration if any
+if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+    ${IPT} -D INPUT -i eth0  -s ${ethmgmtnet}/${ethmgmtprefix} -d ${eth0_ipaddr} -p udp --dport 161 -j ACCEPT ${keyComment} > /dev/null 2>&1
+fi
+
+# Set proper rule if enabled
+if [ $enable -eq 1 ]; then
+    if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+        ${IPT} -A INPUT -i eth0 -s ${ethmgmtnet}/${ethmgmtprefix} -d ${eth0_ipaddr} -p udp --dport 161 -j ACCEPT ${keyComment}
+    fi
+fi
+
+logger -t $0 -p daemon.info "set_snmp_local_status enable=${enable} applied."
+
+exit 0

@@ -1,0 +1,34 @@
+#!/bin/sh
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_tellinet_on_addin_board
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+  . /usr/local/bin/ifcfg_internal_mgmt.sh
+  destination="${IM_ADDINBOARD_IP}"
+else
+  destination="localhost"
+fi
+port=10010
+
+retval=1 #default error
+
+if [ $# != 1 ]; then
+    return $retval #failure
+fi
+state=$1
+
+if [ $state != "OperationalModemState" ]; then
+	return $retval #failure
+fi
+
+# This is the tellitec sanity check
+
+#NEW system : SMS-1156
+echo "GET statistics.status" | nc -w 5 "${destination}" "${port}" 2>/dev/null | grep "statistics.status" > /dev/null 2>&1
+if [ "$?" = "0" ] ; then
+  #success
+  retval=0
+fi
+
+return $retval
+

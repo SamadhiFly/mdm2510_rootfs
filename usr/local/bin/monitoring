@@ -1,0 +1,68 @@
+#!/bin/sh
+
+fatal() {
+    echo $1 > "/var/state/monitoring/state/${check_name}/`date`"
+
+    retryperiod=$(($cycle * $retries / 60))
+
+    # Remove expired failures
+    find /var/state/monitoring/state/${check_name}/ -type f -mmin +${retryperiod} -delete
+
+    # Check if we've reached the number of failures in the failure period. If so, execute the onfailure program
+    failures=`find /var/state/monitoring/state/${check_name} -type f | wc -l`
+    if [ $failures -ge $retries ]; then
+        echo "Executing onfailure $onfailure"
+        $onfailure
+    fi
+
+    exit 1
+}
+
+check_program() {
+    # Set PATH, because the scripts (check_tellinet) assume /usr/local/bin is
+    # in it, but cron does not set this.
+    export PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin/
+
+    if ! timeout -t $timeout $program; then
+        fatal "$program failed"
+    fi
+}
+
+check_process()
+{
+    pid=`pidof $name`
+    if [ -z "$pid" ]; then
+        fatal "Process $name is not running"
+    fi
+
+    running_program=`readlink /proc/${pid}/exe`
+    if [ "$running_program" != "$program" ]; then
+        fatal "Running program $running_program does not match expected program $program"
+    fi
+}
+
+if [ $# -ne 1 ]; then
+    echo "Usage $0 <monitoring test name>"
+    exit 1
+fi
+
+check_name=$1
+
+if [ ! -r /var/state/monitoring/cfg/$check_name ]; then
+    echo "Monitoring test $check_name not found"
+    exit 1
+fi
+
+. /var/state/monitoring/cfg/$check_name
+
+case $type in
+    program)
+        check_program
+        ;;
+    process)
+        check_process
+        ;;
+    *)
+        echo "Unknown type $type"
+        exit 1
+esac

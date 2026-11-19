@@ -1,0 +1,7 @@
+#!/bin/sh
+carselrmttsid=$1
+carselrmtserviceid=$2
+sed -i "s#^carselrmttsid=.*#carselrmttsid=$carselrmttsid#" /var/state/cfg
+sed -i "s#^carselrmtserviceid=.*#carselrmtserviceid=$carselrmtserviceid#" /var/state/cfg
+
+/usr/local/bin/writecfg

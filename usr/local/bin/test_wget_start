@@ -1,0 +1,112 @@
+#!/bin/sh
+
+# params: modem_state testUrl nofVlans vlanName1 dnsServer1 tunAddr1 vlanName2 dnsServer2 tunAddr2 ...
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+success=1
+retval=1 # default failure
+
+rm -f /var/state/test_*_wget #remove output/fail files of previous runs of this test
+
+echo $* >> /var/state/test_report
+echo "test_traffic_wget: running" >> /var/state/test_report
+
+if [ $# -lt 2 ]; then
+    sed "s/test_traffic_wget: running/test_traffic_wget: not enough parameters/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+    return $retval
+fi
+
+state=$1
+
+if [ $state = "OperationalModemState" ]; then
+    wget_url=$2
+    if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+        nofVlans=$3
+        if [ $nofVlans -gt 0 ]; then
+            if [ -n "$wget_url" ]; then
+                success=0   # 0 means ok
+                vlanNr=0
+    
+                while [ $vlanNr -lt $nofVlans ]
+                do
+                    vlan_name=$4
+                    dns_server=$5
+                    tun_addr=$6
+                    shift 4 # skip transparent_dns info
+    
+                    # add ip6tables rule to mark traffic from source tun addr with correct route table (depends on vlannr: see TmsConfigurationManager::performRemoteAccess())
+                    # Needed for http self test
+                    /usr/sbin/ip6tables -A OUTPUT -t mangle -s $tun_addr -p tcp -m tcp --dport 80 -j MARK --set-mark $(( $vlanNr + 1 )) -m comment --comment "route http selftest traffic to tunnel"
+    
+                    if [ "$dns_server" = "NA" -o "$tun_addr" = "NA" ]; then
+                        echo "$vlan_name: not configured" >> /var/state/test_temp_wget
+                        success=1   # failure
+                    else
+                        # This script should not run together with the test_dnslookup script because they both start dnsmasq instances on 'lo'
+                        /usr/local/sbin/lockrun -L /tmp/lo_dnsmasq.lock -W -- /usr/local/bin/test_wget ${wget_url} ${dns_server} ${tun_addr}
+                        retval=$?
+                        if [ "$retval" = 0 ]; then
+                            echo "$vlan_name: ok" >> /var/state/test_temp_wget
+                        else
+                            echo "$vlan_name: failure" >> /var/state/test_temp_wget
+                            success=1   # 1 means failure
+                        fi
+                    fi
+    
+                    # cleanup rule above
+                    /usr/sbin/ip6tables -D OUTPUT -t mangle -s $tun_addr -p tcp -m tcp --dport 80 -j MARK --set-mark $(( $vlanNr + 1 )) -m comment --comment "route http selftest traffic to tunnel"
+    
+                    vlanNr=$(( $vlanNr + 1 ))
+                done
+                if [ "$success" = "0" ]; then
+                    sed "s/test_traffic_wget: running/test_traffic_wget: ok/" </var/state/test_report >/var/state/test_report_n
+                    mv /var/state/test_report_n /var/state/test_report
+                    mv /var/state/test_temp_wget /var/state/test_output_wget
+                else
+                    sed "s/test_traffic_wget: running/test_traffic_wget: nok/" </var/state/test_report >/var/state/test_report_n
+                    mv /var/state/test_report_n /var/state/test_report
+                    mv /var/state/test_temp_wget /var/state/test_fail_wget
+                fi
+            else
+                #echo "wrong config file" >> /var/state/test_fail_dns
+                sed "s/test_traffic_wget: running/test_traffic_wget: not configured/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+            fi
+        else
+            #No layer 3 vlans => no relevant tests. Count as a success, with a specific success message.
+            success=0   # 0 means ok
+            sed "s/test_traffic_wget: running/test_traffic_wget: No layer 3 config => no tests executed./" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+            echo "Skipped: no layer 3 virtual networks." > /var/state/test_output_wget
+        fi
+    else
+        OUTPUT=`routercontroller_jsonrpc -p -t 60 testHttp "{\"Url\":\"${wget_url}\"}"`
+        retval=$?
+        echo "$OUTPUT" > /var/state/test_temp_wget
+        if [ "$retval" = 0 ]; then
+            grep -i -q failure /var/state/test_temp_wget
+            if [ "$?" -eq 0 ]; then
+                sed "s/test_traffic_wget: running/test_traffic_wget: nok/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+                mv /var/state/test_temp_wget /var/state/test_fail_wget
+            else
+                success=0 # 0 means ok
+                sed "s/test_traffic_wget: running/test_traffic_wget: ok/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+                mv /var/state/test_temp_wget /var/state/test_output_wget
+            fi
+        else
+            sed "s/test_traffic_wget: running/test_traffic_wget: nok/" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+            mv /var/state/test_temp_wget /var/state/test_fail_wget
+        fi
+    fi
+else
+    sed "s/test_traffic_wget: running/test_traffic_wget: not operational/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+fi
+
+return $success

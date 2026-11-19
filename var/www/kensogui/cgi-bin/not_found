@@ -1,0 +1,9 @@
+#!/bin/sh
+
+echo 'Status: 404 Not Found'
+echo 'Content-type: text/html'
+echo
+echo '<HTML><HEAD><TITLE>404 Not Found</TITLE></HEAD>'
+echo '<BODY><H1>404 Not Found</H1>'
+echo 'The requested URL was not found'
+echo '</BODY></HTML>'

@@ -1,0 +1,11 @@
+#
+# /etc/fstab
+#
+
+# special filesystems
+proc	/proc			proc	defaults			0 0
+none	/sys/kernel/debug	debugfs	defaults,noauto			0 0
+devpts	/dev/pts		devpts	defaults			0 0
+none	/sys			sysfs	defaults			0 0
+#usbfs	/proc/bus/usb		usbfs	devgid=14,devmode=0660		0 0
+none    /dev/shm                tmpfs   defaults                        0 0

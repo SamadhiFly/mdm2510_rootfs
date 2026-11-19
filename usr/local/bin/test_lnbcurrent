@@ -1,0 +1,32 @@
+#!/bin/sh
+tmpfile="/tmp/tmp..$$"
+retval=1 #default error
+
+rm -f /var/state/test_output_lnbcurrent
+
+#get the state
+/usr/local/bin/modem_controller_client getLnbCurrents > ${tmpfile}
+
+rx_lnbcurrent=`sed -n "s/^Rx_LNB_Current=\([0-9]*\)/\1/p" ${tmpfile}`
+tx_lnbcurrent=`sed -n "s/^Tx_LNB_Current=\([0-9]*\)/\1/p" ${tmpfile}`
+message=`sed -n "s/^measurement_message=\([.]*\)/\1/p" ${tmpfile}`
+result=`sed -n "s/^measurement_result=\([01]\)/\1/p" ${tmpfile}`
+if [ "${result}" = 1 ]; then
+	retval=0 #success
+fi
+
+if [ -n "${message}" ] ; then
+	echo ${message} >> /var/state/test_output_lnbcurrent
+fi
+
+if [ -n "${rx_lnbcurrent}" ] ; then
+	echo "Rx Current = ${rx_lnbcurrent}mA" >> /var/state/test_output_lnbcurrent
+fi
+
+if [ -n "${tx_lnbcurrent}" ] ; then
+	echo "Tx Current = ${tx_lnbcurrent}mA" >> /var/state/test_output_lnbcurrent
+fi
+
+rm $tmpfile
+
+return $retval

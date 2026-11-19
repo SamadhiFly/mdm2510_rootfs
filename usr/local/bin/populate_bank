@@ -1,0 +1,8 @@
+#!/bin/sh
+
+/sbin/personalities/dlg/install.sh $1
+
+
+
+
+

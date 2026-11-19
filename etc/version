@@ -1,0 +1,5 @@
+firmware_version: 4.7.3.4
+firmware_offical_version: V407.03
+buildhost: 3493a88da651
+builddate: Tue Jun 17 16:04:27 UTC 2025
+kernel: kernel-3.10-trunk

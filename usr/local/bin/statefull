@@ -1,0 +1,171 @@
+#!/bin/sh
+
+libdir="/etc/dibbler" 
+logdir="/var/log/dibbler"
+pidfile="${libdir}/server.pid"
+conffile="/${libdir}/server.conf"
+
+write_dibbler_conf() {
+  mkdir -p "${libdir}"
+  mkdir -p "${logdir}"
+
+  rm $conffile
+
+  echo "log-level 6" >> $conffile
+  echo "log-mode syslog" >> $conffile
+  echo "inactive-mode" >> $conffile
+  echo "" >> $conffile
+
+  itfCnt=0
+  while [ $itfCnt -lt $num_interfaces ]; do
+    eval "interface=\$itf${itfCnt}"
+    echo iface \"$interface\" >> $conffile
+    echo { >> $conffile
+    echo "  prefered-lifetime 120" >> $conffile
+    echo "  valid-lifetime 180" >> $conffile
+    echo "  T1 60" >> $conffile
+    echo "  T2 90" >> $conffile
+    echo "" >> $conffile
+    echo "  class" >> $conffile
+    echo "  {" >> $conffile
+
+    eval "prefix=\$itf${itfCnt}_ipv6_prefix"
+    eval "prefixlen=\$itf${itfCnt}_ipv6_prefixlen"
+    eval "gateway=\$itf${itfCnt}_ipv6_gateway"
+    echo "    pool ${prefix}/${prefixlen}" >> $conffile
+    echo "  }" >> $conffile
+    echo "" >> $conffile
+    echo "  option dns-server ${gateway}" >> $conffile
+
+    eval "num_pd_enabled=\$itf${itfCnt}_num_pd_enabled"
+    if [ ! "$num_pd_enabled" -gt 0 ]
+    then
+      echo "  # no subnets for prefix delegation" >> $conffile
+    else
+      echo "  pd-class" >> $conffile
+      echo "  {" >> $conffile
+      n=0
+      eval "num_ipv6_subnets=\$itf${itfCnt}_num_ipv6_subnets"
+      while [ $n -lt "$num_ipv6_subnets" ]; do
+        eval "enable=\$itf${itfCnt}_ipv6_subnet_enable_pd${n}"
+        if [ $enable -eq 1 ]; then
+          eval "p=\$itf${itfCnt}_ipv6_subnet_prefix${n}"
+          eval "l=\$itf${itfCnt}_ipv6_subnet_prefixlen${n}"
+          echo "    pd-pool ${p}/${l}" >> $conffile
+        fi
+        let "n += 1"
+      done
+      # all the subnets should have the same prefix length
+      eval "pdlen=\${itf${itfCnt}_ipv6_subnet_prefixlen0}"
+      echo "    pd-length ${pdlen}" >> $conffile
+      echo "  }" >> $conffile
+    fi
+    echo "}" >> $conffile
+    echo "" >> $conffile
+    let "itfCnt += 1"
+  done #loop over all interfaces
+
+  echo 'script "/usr/local/bin/dibbler_event"' >> $conffile
+}
+
+clear_dibbler_state() {
+  rm -f /var/lib/dibbler/*.xml
+}
+
+stop_dibbler() {
+  /usr/sbin/dibbler-server stop
+  if [ -e "${pidfile}" ]; then
+    kill `cat ${pidfile}`
+    sleep 1
+    rm -f "${pidfile}"
+  fi
+}
+
+start_dibbler() {
+  # Only start Dibbler if at least 1 interface is defined that has IPv6 enabled.
+  # Otherwise, Dibbler will give an error, and not serve any function anyway.
+  if [ $num_interfaces -gt 0 ]; then
+    /usr/sbin/dibbler-server start
+  fi
+}
+
+# Main
+if [ $# -lt 3 ]; then
+  echo "usage: statefull <filename> <version> <num_interfaces>"
+  echo "                 [ <interface> <ipv6 prefix> <ipv6_prefix_length> <ipv6_dns>"
+  echo "                   <num_subnets> <subnet_prefix>+ <subnet_prefix_length>+ <subnet_gateway>+ <subnet_enable_pd_1>+ ]+"
+  exit 1
+fi
+
+filename=$1
+version=$2
+num_interfaces=$3
+
+itfCnt=0
+while [ $itfCnt -lt $num_interfaces ]; do
+  eval "itf${itfCnt}=$4"
+  eval "itf${itfCnt}_ipv6_prefix=$5"
+  eval "itf${itfCnt}_ipv6_prefixlen=$6"
+  eval "itf${itfCnt}_ipv6_gateway=$7"
+  eval "itf${itfCnt}_num_ipv6_subnets=$8"
+  shift 5
+
+  eval echo "IPv6 Prefix: \$itf${itfCnt}_ipv6_prefix/\$itf${itfCnt}_ipv6_prefixlen"
+  eval echo "IPv6 DNS: \$itf${itfCnt}_ipv6_gateway"
+  eval echo "Number of subnets: \$itf${itfCnt}_num_ipv6_subnets"
+
+  #shortcut to avoid lots of eval statements in all while loops
+  eval "num_ipv6_subnets=\$itf${itfCnt}_num_ipv6_subnets"
+
+  # prefixes for IPv6 subnets
+  n=0
+  while [ $n -lt "$num_ipv6_subnets" ]; do
+      eval "itf${itfCnt}_ipv6_subnet_prefix${n}=$4"
+      shift
+      n=$(( $n + 1 ))
+  done
+
+  # prefix lengths for IPv6 subnets
+  n=0
+  while [ $n -lt "$num_ipv6_subnets" ]; do
+      eval "itf${itfCnt}_ipv6_subnet_prefixlen${n}=$4"
+      shift
+      n=$(( $n + 1 ))
+  done
+
+  # gateways for IPv6 subnets
+  n=0
+  while [ $n -lt "$num_ipv6_subnets" ]; do
+      eval "itf${itfCnt}_ipv6_subnet_gateway${n}=$4"
+      shift
+      n=$(( $n + 1 ))
+  done
+
+  # prefix delegation setting for IPv6 subnets
+  n=0
+  eval "itf${itfCnt}_num_pd_enabled=0"
+  while [ $n -lt "$num_ipv6_subnets" ]; do
+      eval "itf${itfCnt}_ipv6_subnet_enable_pd${n}=$4"
+      if [ $4 -eq 1 ]
+      then
+          eval let "itf${itfCnt}_num_pd_enabled+=1"
+      fi
+      shift
+      n=$(( $n + 1 ))
+  done
+  eval echo "Number of subnets for prefix delegation: \$itf${itfCnt}_num_pd_enabled"
+
+  let "itfCnt += 1"
+done #while [ $itfCnt -lt $num_interfaces ]
+
+stop_dibbler
+write_dibbler_conf
+clear_dibbler_state
+if [ $num_interfaces -ne 0 ];then
+    start_dibbler
+fi
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0
+

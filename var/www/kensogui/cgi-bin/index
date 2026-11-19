@@ -1,0 +1,17 @@
+#!/bin/sh
+
+echo "Content-Type: text/html"
+echo ""
+# WARNING: COPY of index.html
+echo '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">'
+echo '<html xmlns="http://www.w3.org/1999/xhtml">'
+echo '<head>'
+echo '    <link rel="icon" href="data:;base64,iVBORw0KGgo=">'
+if [ -n "$QUERY_STRING" ]; then
+    echo "    <meta http-equiv=\"refresh\" content=\"0;url=../main.html?v=4.7.3.4&$QUERY_STRING\"/>"
+else
+    echo "    <meta http-equiv=\"refresh\" content=\"0;url=../main.html?v=4.7.3.4\"/>"
+fi
+echo '    <title>Newtec Satellite Modem</title>'
+echo '</head><body></body></html>'
+

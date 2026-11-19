@@ -1,0 +1,8 @@
+name=TCS
+program=/usr/local/bin/check_ping_tcs.sh
+type=program
+timeout=%WDTIMEOUTSHORT%
+cron="%MINUTES% %START%-%END% * * *"
+retries=%WDRETRIES%
+cycle=%WDCYCLE%
+onfailure="/usr/local/bin/log2flashandreboot.sh ping_tcs"

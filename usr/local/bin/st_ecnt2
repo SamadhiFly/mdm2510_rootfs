@@ -1,0 +1,24 @@
+#!/bin/sh
+dec2hex() {
+  let "n=$1"
+  let 'a=n/16'
+  let 'b=n-(a*16)'
+  let 'a=a+1'
+  let 'b=b+1'
+  c1=$(expr substr "0123456789abcdef" "$a" 1)
+  c2=$(expr substr "0123456789abcdef" "$b" 1)
+  ret="$c1$c2"
+}
+
+dmd=`sed -n 's/.*modem\.fe=.,stb0899,\([0-9]*\),1,\([0-9]*\).*/\1/p' /proc/cmdline`
+dec2hex $dmd
+dmd=$ret
+
+# output ECNT2 in hex
+dmdstat2=`echo w f3fc00040000  w f320 r 4 u w f340 r 4 u | /usr/local/sbin/i2cspy $dmd | tail -n 1 | sed 's/\(..\)\(..\)\(..\)\(..\)/\4\3\2\1/' | sed 's/^.*\(.\)$/\1/'`
+if [ "$dmdstat2" = "3" ]; then
+  echo w f526 r 2 u | /usr/local/sbin/i2cspy $dmd
+else
+  echo -n "not locked"
+fi
+echo ""

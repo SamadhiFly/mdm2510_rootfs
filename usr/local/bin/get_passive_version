@@ -1,0 +1,21 @@
+#!/bin/sh
+
+source /sbin/personalities/dlg/install_handling.source
+
+get_legacy_passive_version() {
+	activebuild=$(get_cmdline_var "activebuild")
+	slot=$((1-activebuild))
+	/sbin/mkimage.sh list /dev/img${slot} | format_version
+}
+
+local ver=""
+
+if is_mp_supported; then
+    ver=$(/sbin/personalities/dlg/versioninfo_slot.sh passive)
+fi
+
+if [ -z "$ver" ]; then
+    ver=$(get_legacy_passive_version)
+fi
+
+echo "$ver"

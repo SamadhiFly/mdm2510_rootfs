@@ -1,0 +1,47 @@
+#!/bin/sh
+# This starts a dns server that hands on all dns request to the upstream server
+# This is needed in the case that modem needs to resolve dns names
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+parse_moob_enabled
+
+dnsmasq_conf_cfg="/etc/dnsmasq/dnsmasq.conf"
+
+write_dnsmasq_conf_dns_only()
+{
+    dnsmasq_conf_tmp="/tmp/dnsmasq.conf.tmp"
+    echo "no-resolv" >> $dnsmasq_conf_tmp
+    echo "no-poll" >> $dnsmasq_conf_tmp
+    echo "no-hosts" >> $dnsmasq_conf_tmp
+    echo "server=169.254.0.135" >> $dnsmasq_conf_tmp
+    echo "no-negcache" >> $dnsmasq_conf_tmp
+
+    cat $dnsmasq_conf_tmp > $dnsmasq_conf_cfg
+    rm $dnsmasq_conf_tmp
+}
+
+stop_dnsmasq() {
+  if [ -e "/var/run/dnsmasq.pid" ]; then
+    kill `cat /var/run/dnsmasq.pid`
+    sleep 1 #it takes a bit to really die
+    rm -f /var/run/dnsmasq.pid
+  fi
+}
+
+start_dnsmasq() {
+  /usr/sbin/dnsmasq --quiet-dhcp --conf-file=$dnsmasq_conf_cfg
+}
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then   
+    if [ ${moob_enabled} -eq 1 ]; then
+      
+        #enable ports for DNS requests
+        /usr/sbin/iptables -A INPUT -p udp --sport 53 -j ACCEPT
+        /usr/sbin/iptables -A INPUT -p tcp --sport 53 -j ACCEPT
+        
+        write_dnsmasq_conf_dns_only
+        start_dnsmasq
+    fi  
+fi
+

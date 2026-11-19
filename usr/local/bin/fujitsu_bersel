@@ -1,0 +1,2 @@
+#!/bin/sh
+echo $1 > /sys/module/mb86a15/parameters/bersel 2>&1

@@ -1,0 +1,133 @@
+#!/bin/sh
+
+# params: modem_state testHostName nofVlans vlanName1 dnsServer1 tunAddr1 vlanName2 dnsServer2 tunAddr2 ...
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+success=1
+retval=1 # default failure
+
+rm -f /var/state/test_*_dns #remove output/fail files of previous runs of this test
+
+echo $* >> /var/state/test_report
+echo "test_traffic_dns: running" >> /var/state/test_report
+
+if [ $# -lt 2 ]; then
+    sed "s/test_traffic_dns: running/test_traffic_dns: not enough parameters/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+    return $retval
+fi
+
+state=$1
+
+if [ $state = "OperationalModemState" ]; then
+    dns_url=$2
+    nofVlans=$3
+
+    if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+        if [ $nofVlans -gt 0 ]; then
+            if [ -n "$dns_url" ]; then
+                success=0   # 0 means ok
+                vlanNr=0
+                while [ $vlanNr -lt $nofVlans ]
+                do
+                    vlan_name=$4
+                    dns_server=$5
+                    tun_addr=$6
+                    shift 4 # skip transparent_dns info
+    
+                    if [ "$dns_server" = "NA" -o "$tun_addr" = "NA" ]; then
+                        echo "$vlan_name: not configured" >> /var/state/test_temp_dns
+                        success=1   # failure
+                    else
+                        # This script should not run together with the test_wget script because they both start dnsmasq instances on 'lo'
+                        /usr/local/sbin/lockrun -L /tmp/lo_dnsmasq.lock -W -- /usr/local/bin/test_dnslookup ${dns_url} ${dns_server} ${tun_addr}
+                        retval=$?
+                        if [ "$retval" = 0 ]; then
+                            echo "$vlan_name: ok" >> /var/state/test_temp_dns
+                        else
+                            echo "$vlan_name: failure" >> /var/state/test_temp_dns
+                            success=1   # 1 means failure
+                        fi
+                    fi
+                    vlanNr=$(( $vlanNr + 1 ))
+                done
+                if [ "$success" = "0" ]; then
+                    sed "s/test_traffic_dns: running/test_traffic_dns: ok/" </var/state/test_report >/var/state/test_report_n
+                    mv /var/state/test_report_n /var/state/test_report
+                    mv /var/state/test_temp_dns /var/state/test_output_dns
+                else
+                    sed "s/test_traffic_dns: running/test_traffic_dns: nok/" </var/state/test_report >/var/state/test_report_n
+                    mv /var/state/test_report_n /var/state/test_report
+                    mv /var/state/test_temp_dns /var/state/test_fail_dns
+                fi
+            else
+                #echo "wrong config file" >> /var/state/test_fail_dns
+                sed "s/test_traffic_dns: running/test_traffic_dns: not configured/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+            fi
+        else
+            #No layer 3 vlans => no relevant tests. Count as a success, with a specific success message.
+            success=0   # 0 means ok
+            sed "s/test_traffic_dns: running/test_traffic_dns: No layer 3 config => no tests executed./" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+            echo "Skipped: no layer 3 virtual networks." > /var/state/test_output_dns
+        fi
+    else
+        echo "" > /var/state/test_temp_dns
+        test_params="{\"DomainName\":\"${dns_url}\""
+        # Add vlans with transparent dns to skip list
+        skipList=""
+        if [ $nofVlans -gt 0 ]; then
+            vlanNr=0
+
+            while [ $vlanNr -lt $nofVlans ]; do
+                vlan_name=$4
+                transparent_dns=$7
+                shift 4
+
+                 if [ -n "$transparent_dns" ] && [ "$transparent_dns" == "Y" ]; then
+                     echo "Skipping \"${vlan_name}\": transparent DNS enabled." >> /var/state/test_temp_dns
+                     if [ -z "$skipList" ]; then
+                         skipList="\"${vlan_name}\""
+                     else
+                         skipList="${skipList},\"${vlan_name}\""
+                     fi
+                fi
+                vlanNr=$(( $vlanNr + 1 ))
+            done
+        fi
+        if [ -n "${skipList}" ]; then
+            test_params="${test_params},\"SkipVnsList\":[${skipList}]"
+        fi
+        test_params="${test_params}}"
+
+        OUTPUT=`routercontroller_jsonrpc -p -t 60 testDns "${test_params}"`
+        retval=$?
+
+        echo "$OUTPUT" >> /var/state/test_temp_dns
+        if [ "$retval" = 0 ]; then
+            grep -i -q failure /var/state/test_temp_dns
+            if [ "$?" -eq 0 ]; then
+                sed "s/test_traffic_dns: running/test_traffic_dns: nok/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+                mv /var/state/test_temp_dns /var/state/test_fail_dns
+            else
+                success=0 # 0 means ok
+                sed "s/test_traffic_dns: running/test_traffic_dns: ok/" </var/state/test_report >/var/state/test_report_n
+                mv /var/state/test_report_n /var/state/test_report
+                mv /var/state/test_temp_dns /var/state/test_output_dns
+            fi
+        else
+            sed "s/test_traffic_dns: running/test_traffic_dns: nok/" </var/state/test_report >/var/state/test_report_n
+            mv /var/state/test_report_n /var/state/test_report
+            mv /var/state/test_temp_dns /var/state/test_fail_dns
+        fi
+    fi
+else
+    sed "s/test_traffic_dns: running/test_traffic_dns: not operational/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+fi
+
+return $success

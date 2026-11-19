@@ -1,0 +1,233 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+write_dnsmasq_conf() {
+        tmpl="/etc/dnsmasq.conf.templ"
+        tmp="/tmp/dnsmasq.conf.tmp"
+        cp $tmpl $tmp
+        
+        if [ $gateway == "0.0.0.0" ]
+        then
+                # dnsmasq refuses to bind on a "0.0.0.0" - address (SMS-835)
+                # set it on the local-loopback instead
+                gateway="127.0.0.1"
+        fi
+
+        #Get the name of the interface we need to be using.
+        itf_name=eth${itf_nr}
+        if [ $is_vlan -eq "0" ]; then
+                vlan_interface=${itf_name}
+        else
+                vlan_interface=${itf_name}.${vlan_id}
+        fi
+        
+        sed -i "s/%MTU%/${mtu}/" $tmp
+        sed -i "s/%GATEWAY%/${gateway}/" $tmp
+        sed -i "s/%INTERFACE%/${vlan_interface}/" $tmp
+        
+        if [ "${ipv6_enable}" -ne 1 -o -z "${gateway_ipv6}" ]
+        then
+                # remove preceding comma from listen-address line
+                sed -i "s/,%GATEWAY_IPV6%//" $tmp
+                # remove whole address line
+                sed -i "s/^address=.*%GATEWAY_IPV6%/# no IPv6/" $tmp
+        else
+                sed -i "s/%GATEWAY_IPV6%/${gateway_ipv6}/g" $tmp
+        fi
+
+        #binding options
+        echo "bind-dynamic" >> $tmp
+        echo "interface=${vlan_interface}" >> $tmp
+
+        tftpserver=`sed -n "s/^tftpserver=\(.*\)$/\1/p" /var/state/cfg`
+        tftpfile=`sed -n "s/^tftpfile=\(.*\)$/\1/p" /var/state/cfg`
+        if [ -n "${tftpserver}" ]; then
+                echo "dhcp-option=66,${tftpserver}" >> $tmp
+                        
+                if [ -n "${tftpfile}" ]; then
+                        echo "dhcp-boot=${tftpfile},${tftpserver},${tftpserver}" >> $tmp
+                fi
+        fi
+
+        if [ $bridged -gt 0 ]; then
+                # handout only one single ip address
+                echo "dhcp-range=${bridged_cpe_address},${bridged_cpe_address},${netmask},2m" >> $tmp
+        else
+            # if router controller is supported, we always assign the 1st address of the DHCP pool to routercontroller's WAN
+            # and the rest of the pool is managed by the routercotnroller itself
+            # use case: dedicated subnet + nat
+            if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+                # important: this code needs to be in sync with calculateDefaultDHCPRange in modemcontroller
+                # because the same ip address must be used for dhcp (nat use case) and tellinet config
+                subnet=`ipcalc -n $gateway/$prefix_length | cut -d '=' -f 2`
+
+                # dhcp start address is subnet + 1
+                startLast=${subnet##*.}
+                startLast=$(($startLast+1))
+                start=${subnet%.*}.$startLast
+
+                # do not clash with gateway
+                if [ "$start" = "$gateway" ]; then
+                    startLast=$(($startLast+1))
+                    start=${subnet%.*}.$startLast
+                fi
+
+                echo "dhcp-range=${start},${start},${netmask},2m" >> $tmp
+            else
+                # handout an entire subnet
+                start=`ipcalc -n $gateway/$prefix_length | cut -d '=' -f 2`
+                stop=`ipcalc -b $gateway/$prefix_length | cut -d '=' -f 2`
+                # dhcp start address is subnet + 1
+                startLast=${start##*.}
+                if [ $startLast -lt 255 ] ; then
+                        startLast=$(($startLast+1))
+                fi
+                # SMS 1084
+                # dhcp stop address is range subnet - 1
+                last=${stop##*.}
+                if [ $last -gt 0 ] ; then
+                        last=$(($last-1))
+                fi
+                start=${start%.*}.$startLast
+                stop=${stop%.*}.$last
+                echo "dhcp-range=${start},${stop},${netmask},2m" >> $tmp
+            fi
+        fi
+        
+        if [ $nameserver != "0" ] ; then
+                echo "server=${nameserver}@${tun_address}" >> $tmp
+        else
+                #SMS-840
+                echo "address=/#/${gateway}" >> $tmp
+                if [ "${ipv6_enable}" -eq 1 -a -n "${gateway_ipv6}" ] ; then
+                        echo "address=/#/${gateway_ipv6}" >> $tmp
+                fi
+        fi
+        
+        # if routercontroller_supported=1, dhcp_enable flag will be configured on router controller's LAN 
+        #but DHCP between main board LAN and routercontroller WAN should keep working
+        if [ "${dhcp_enable}" = "0" -a "${CFG_routercontroller_supported}" -ne 1 ]
+        then
+            echo "no-dhcp-interface=${vlan_interface}" >> $tmp
+        fi
+
+        # if routercontroller_supported=1 and NAT is disabled, we should not assign dhcp leases to the 
+        # WAN side of the routercontroller (WAN address configured statically).
+        # If NAT is enabled instead, routercontroller's WAN will get its address via DHCP
+        if [ "${CFG_routercontroller_supported}" -eq 1 -a  ! "$nat_enabled"  ]; then
+            echo "no-dhcp-interface=${vlan_interface}" >> $tmp
+        fi
+       
+        cat $tmp > $cfg
+        rm $tmp
+}
+
+
+stop_dnsmasq() {
+        if [ -e "${pidfile}" ]; then
+                kill -9 `cat ${pidfile}`
+                rm -f ${pidfile}
+                rm -f ${leasefile}
+        fi
+}
+
+start_dnsmasq() {
+        #SMS-1606: ensure the network interface (started by another script) is up before starting dnsmasq
+        maxloopiter=5
+        n=0
+        while [ $n -lt "$maxloopiter" ]; do
+                ifconfig | grep ${tun_address}
+                if [ $? -eq 0 ] ; then
+                    break
+                fi
+                sleep 1
+                let "n += 1"
+        done
+
+        #First: remove old marking rules, to ensure no left-overs of a previous config are present
+        ip6tables -t mangle  -S | grep -F ${key} | sed 's/^-A //' | while read rule; do eval " ip6tables -t mangle -D $rule"; done
+
+        #Add iptables rule, used to mark requests to master dns server, ensuring they are routed properly
+        ip6tables -t mangle -A OUTPUT -s ${tun_address} -p udp -m udp --dport 53 -j MARK --set-xmark ${table} ${keyComment}
+        ip6tables -t mangle -A OUTPUT -s ${tun_address} -p udp -m udp --dport 53 -j ACCEPT ${keyComment}
+        ip6tables -t mangle -A OUTPUT -s ${tun_address} -p tcp -m tcp --dport 53 -j MARK --set-xmark ${table} ${keyComment}
+        ip6tables -t mangle -A OUTPUT -s ${tun_address} -p tcp -m tcp --dport 53 -j ACCEPT ${keyComment}
+
+        /usr/sbin/dnsmasq --quiet-dhcp --pid-file=${pidfile} --conf-file=${cfg} --dhcp-leasefile=${leasefile}
+}
+
+# Main
+if [ $# -lt 17 ]; then
+        echo "usage: dnscfg <filename> <version>"
+        echo "              <eth itf number> <is vlan> <nat enabled> <vlan id>"
+        echo "              <gateway> <prefix length>"
+        echo "              <bridged> <cpe address (not used if not bridged)>"
+        echo "              <nameserver (or 0 if none)>"
+        echo "              <tun address> <routing table>"
+        echo "              <ipv6_enable> <gateway_ipv6>"
+        echo "              <dhcp_enable> <mtu>"
+        echo "              <rule key>"
+        echo "        The <rule key> is a unique key identifying the iptables rules that were added to implement firewalling."
+        echo "        This key probably looks something like *IPTKEY:FW*."
+        exit 1
+fi
+
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    echo "script skipped because routercontroller is supported"
+    exit 0
+fi
+
+filename=$1
+version=$2
+itf_nr=$3
+is_vlan=$4
+nat_enabled=$5
+vlan_id=$6
+gateway=$7
+prefix_length=$8
+netmask=`ipcalc -m 0.0.0.0/${prefix_length} | cut -d '=' -f 2`
+
+bridged=$9
+bridged_cpe_address=${10}
+
+nameserver=${11}
+tun_address=${12}
+table=${13}
+
+ipv6_enable=${14}
+gateway_ipv6=${15}
+dhcp_enable=${16}
+mtu=${17}
+
+key=${18}
+keyComment="-m comment --comment ${key}"
+
+#vlan extension (for lease file, config file, etc.) and tun itf
+if [ $is_vlan -eq "0" ]; then
+        vlan_extension=""
+else
+        vlan_extension=".${vlan_id}"
+fi
+cfg="/etc/dnsmasq/dnsmasq.conf${vlan_extension}"
+pidfile="/var/run/dnsmasq.pid${vlan_extension}"
+leasefile="/var/state/dnsmasq.leases${vlan_extension}"
+
+#debug
+echo "Gateway address: $gateway / $prefix_length"
+echo "Netmask: $netmask"
+echo "Nameserver: $nameserver"
+
+echo "IPv6 enable: $ipv6_enable"
+echo "IPv6 gateway: $ipv6_gateway"
+
+stop_dnsmasq
+write_dnsmasq_conf
+start_dnsmasq
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0
+

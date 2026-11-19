@@ -1,0 +1,34 @@
+<?xml version="1.0" standalone="yes" ?>
+<FpgaInventory Name = "ntc6817fa">
+  <Maps>
+    <Map Name = "VersionRom" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x29400" />
+    <Map Name = "UlogonTransmit" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x118000" />
+    <Map Name = "UlogonTxData" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x118000" />
+    <Map Name = "DynSbc" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x103900" />
+    <Map Name = "I2cStOxford" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x0" />
+    <Map Name = "StOxfordItf" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x30000" />
+    <Map Name = "IsiFilter" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x29630" />
+    <Map Name = "MpegSig" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x29600" />
+    <Map Name = "MpeGse" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x10000" />
+    <Map Name = "Uw" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x100000" />
+    <Map Name = "Tpb" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x101000" />
+    <Map Name = "CpmMod" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x101800" />
+    <Map Name = "Sac" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x103080" />
+    <Map Name = "Csc" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x103800" />
+    <Map Name = "FecEncoder" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x120000" />
+    <Map Name = "TxPath" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x102000" />
+    <Map Name = "NgMxDmaTimePlanBuffer" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x180000" />
+    <Map Name = "NgMxDmaSac" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x184000" />
+    <Map Name = "NgMxDmaTxPath" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x186000" />
+    <Map Name = "NgMxDmaMod" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x188000" />
+    <Map Name = "TxFilterDialog" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x188000" />
+    <Map Name = "NgMxDmaWaveform" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x1A0000" Size="0x8000" Instances="4"/>
+    <Map Name = "Mdm2510Rf" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x100900" />
+    <Map Name = "MDMxx10Dac" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x140000" />
+    <Map Name = "SbcRfSettings" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x108a80" />
+    <Map Name = "MDMxx10MixMod" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x104100" />
+	<Map Name = "ResetControl" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x103100" />
+	<Map Name = "SpiLTC6954ClockDistribution" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x40" /> 
+  <Map Name = "GpioBucReferenceClock" MajorVersion = "1" MinorVersion = "0" BaseAddress = "0x20" /> 
+  </Maps>
+</FpgaInventory>

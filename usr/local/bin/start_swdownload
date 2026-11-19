@@ -1,0 +1,55 @@
+#!/bin/sh
+
+. /etc/parse_modem_netdev.sh
+
+problem_detected=0
+# this script may ONLY be called ONCE at boot time!!!!!
+ip link show dev ${modem_netdev_sig_demod} > /dev/null
+if [ $? -ne 0 ]; then
+        echo "no modem detected"
+        problem_detected=1
+fi
+if [ "$problem_detected" = "0" ]; then
+   always=1
+   while [ "$always" = "1" ]; do
+      # Wait up to 2 minutes for the modem controller to become alive.
+      # swdownload communicates with modem_controller, which works better when it's running.
+      # This is not critical for swdownload though, so we eventually give up so
+      # we can still upgrade even if modem_controller never starts
+      iterations=0
+      while ! /usr/local/bin/s3p getuid >/dev/null 2>&1; do
+          iterations=$(( $iterations + 1 ))
+          if [ $iterations -gt 40 ]; then
+              break
+          fi
+          sleep 3
+      done
+      # modem_netdev_sig_demod2 is only defined when multiple satnets are available
+      /usr/local/bin/generate_swdownload_conf && /usr/local/bin/swdownload ${modem_netdev_sig_demod} ${modem_netdev_sig_demod2}
+      if [ "$?" = "55" ]; then
+          if ! /sbin/is_confirmation_pending.sh; then
+              sed -i 's/status=.*/status=Writing downloaded software to flash/' /var/state/downloadreport
+              logger -t start_swdownload -p daemon.info "Writing downloaded software to flash"
+              /usr/local/bin/populate_bank /tmp/downloadbuffer > /tmp/logfiles/populate_bank.log 2>&1
+              if [ "$?" = "0" ]; then
+                  /usr/local/bin/try_alternative
+                  sed -i 's/status=.*/status=Rebooting .../' /var/state/downloadreport
+                  #Reboot using reason SWUPGRADE (2)
+                  /usr/local/bin/trigger_reboot normal 2
+              else
+                  sed -i 's/status=.*/status=Flash write failed/' /var/state/downloadreport
+                  logger -t start_swdownload -p daemon.err "Flash write failed"
+              fi
+          else
+              logger -t start_ethswdownload -p daemon.err "swdownload: can not install, sw confirmation is pending."
+          fi
+      else
+          echo swdownload terminated abnormally
+          logger -t start_swdownload -p daemon.err "swdownload terminated abnormally"
+          always=0
+      fi
+   done
+else
+   echo swdownload not started
+   logger -t start_swdownload -p daemon.err "swdownload not started"
+fi

@@ -1,0 +1,20 @@
+#!/bin/sh
+# This script is invoked when the debug mode has to be activated.
+# in debug mode it is possible to do a telnet to the terminal.
+# {activate|deactivate} 
+
+case "$1" in
+  activate|activated)
+    echo 1 > /var/state/debugmode
+    /usr/sbin/iptables -P INPUT ACCEPT
+    /usr/sbin/ip6tables -P INPUT ACCEPT
+    echo "Debug mode activated."
+    ;;
+  deactivate|deactivated)
+    echo 0 > /var/state/debugmode
+    /usr/sbin/iptables -P INPUT DROP
+    /usr/sbin/ip6tables -P INPUT DROP
+    echo "Debug mode deactivated."
+    ;;
+esac
+

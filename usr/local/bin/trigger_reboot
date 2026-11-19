@@ -1,0 +1,46 @@
+#!/bin/sh
+
+# usage: trigger_reboot <normal|factory> [<reboot_reason_id>]
+#     reboot_reason_id: The integer value, which is defined in the `TLD for SNMP OID for system boot/reboot`.
+
+# SMS-990: we should not reboot when the rwcfg tool is still writing the flash config, so wait until its lock file is erased
+if [ -z "$LOCK" ]; then
+	LOCK=/var/run/cfg.lock
+	export LOCK
+	flock -x $LOCK "$0" "$@"
+	exit $?
+fi
+
+if [ -z "$2" ]; then
+    # Using the category "0: Unknown" for this case.
+    # See the `TLD for SNMP OID for system boot/reboot` for the rationale.
+    reboot_reason_id=0
+else
+    reboot_reason_id=$2
+fi
+
+# re-read the configuration to not write changes that are not meant to be written yet, see MODSWFW-664
+/usr/local/bin/readcfg
+
+exists=`grep "^reboot_reason_id=" /var/state/cfg`
+if [ -z "$exists" ]; then
+    echo "reboot_reason_id=$reboot_reason_id" >> /var/state/cfg
+else
+    sed -i "s/^reboot_reason_id=.*/reboot_reason_id=$reboot_reason_id/" /var/state/cfg
+fi
+
+# write the cfg
+/usr/local/bin/writecfg
+
+# sync files to disk
+sync
+
+case "$1" in
+  normal)
+  	/usr/local/sbin/reboot_wrapper >/dev/null 2>&1 &
+    ;;
+  factory)
+    	/usr/local/bin/do_factory_reset  
+	/usr/local/sbin/reboot_wrapper >/dev/null 2>&1 &
+    ;;
+esac

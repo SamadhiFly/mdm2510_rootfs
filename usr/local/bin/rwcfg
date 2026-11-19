@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "deprecated: $0 $@, redirecting to writecfg ..." | logger -s
+exec writecfg

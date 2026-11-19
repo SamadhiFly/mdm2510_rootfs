@@ -1,0 +1,13 @@
+#!/bin/sh
+
+pic_i2c_address=22
+modemtype=`grep "modemtype" /var/state/cfg | sed -n "s/^modemtype=\(.*\)$/\1/p"`
+if [ "$modemtype" = 1 ]; then
+  pic_status=`echo w 01 r 1 u | /usr/local/sbin/i2cspy $pic_i2c_address`
+  pic_status=$((0x$pic_status))	#convert to binary
+  let BUC_overcurrent=$((pic_status & 0x01))
+  if [ $BUC_overcurrent -eq 1 ]; then
+    exit 1;
+  fi 
+fi
+exit 0;

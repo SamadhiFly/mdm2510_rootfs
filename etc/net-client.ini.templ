@@ -1,0 +1,75 @@
+[config_version]
+version=3.7
+
+[recipient]
+
+[shell]
+login=none
+listen_address=:8000
+
+[command_port]
+login=none
+listen_address=10010
+
+[watchdog]
+activate=1
+max_memory_usage=26 MB
+
+[logging]
+log_file=<syslog>
+log_level=normal
+
+[general]
+#scheduling_priority=realtime-roundrobin 2 
+license_file=/etc/license.ini
+config_directory=/etc/tellishape_config/
+cpu_limit=98 %
+
+[etcp_parameters]
+etcp_receive_protocol=labeled-ip
+etcp_send_protocol=labeled-ip
+server_announcement_address=none
+max_send_data_rate=100 Mbit/s
+max_receive_data_rate=100 Mbit/s
+continuous_server_connection=6 h
+inactivity_timeout=0 s
+max_server_connections=250
+packet_size=1792 byte
+encryption_thread_max_nr_of_contexts=400
+
+[etcp_connection_control_client]
+connect_initial_timeout=10000 s
+info_interval=500 ms
+
+[payload_compression]
+cpu_target=30 %
+nr_parallel_compressions=100
+nr_parallel_compression_probings=20
+control_interval=1s
+cpu_usage_window_size=1s
+
+[user_mode_ip_stack]
+keepalive_interval=10s
+keepalive_time=120s
+
+
+
+[preset]
+preset_name=base
+reclassify_on_dscp_change=net
+capturing_compression=1
+compression_level=2,11,2
+compression_probing_volume=5000 byte
+compression_probing_timeout=30 s
+min_compression_gain=1 kbit/s
+non_accelerated_rate_control=0
+non_accelerated_max_queue_time=500 ms
+set_etcp_dscp=<copy>
+set_dscp=<copy>
+capture_tcp=(not ip ah) and tcp
+capture_ip=ip
+udp_header_compression=0
+tcp_header_compression=0
+ip_header_compression=0
+max_connections_mode=drop
+

@@ -1,0 +1,25 @@
+#!/bin/sh
+
+case "$1" in
+  uboot_config)
+    cat /var/state/cfg 
+    ;;
+  tms_terminal_config)
+    cliclient GetLayer3Data -g RequestData.Layer3Data
+    ;;
+  perf_counters)
+   cat /var/state/perfcounters 
+    ;;
+  cmd_line)
+   cat /var/state/cmdline
+    ;;
+  download_report)
+   cat /var/state/downloadreport
+    ;;
+  debug_mode)
+   cat /var/state/debugmode
+    ;;
+  dnsmasq_leases)
+   cat /var/state/dnsmasq.leases
+   ;;
+esac

@@ -1,0 +1,19 @@
+#!/bin/sh
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+change_var() {
+    sed -i "s#^$1=.*#$1=$2#" /var/state/cfg
+}
+
+# if router controller is supported and not in bridged mode, reset flash  config to default value
+if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    change_var "nat_remotely_managed" "0"
+    change_var "firewallIPv4_remotely_managed" "0"
+    change_var "firewallIPv6_remotely_managed" "0"
+    change_var "wifi_remotely_managed" "0"
+
+    /usr/local/bin/writecfg
+fi
+

@@ -1,0 +1,290 @@
+#!/bin/sh
+#set -e -x
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+parse_tellinet_on_addin_board
+
+change_var() {
+      sed -i "s#^$1=.*#$1=$2#" /var/state/cfg
+}
+get_netconfig() {
+  ethmgmtipaddr=`sed -n "s/^ipaddr=\(.*\)$/\1/p" /var/state/cfg`
+  ethmgmtnetmask=`sed -n "s/^netmask=\(.*\)$/\1/p" /var/state/cfg`
+  if [ -n "$ethmgmtipaddr" ]; then
+    ethmgmtprefix=`ipcalc -sp $ethmgmtipaddr $ethmgmtnetmask | sed -n "s/PREFIX=\(.*\)/\1/p"`
+    ethmgmtnet=`ipcalc -sn ${ethmgmtipaddr}/${ethmgmtprefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+  fi
+}
+
+configure_vlan() {
+  # We assume the vlan on the eth interface, and the vlan's tun interface are already created earlier.
+
+  eth_itf_name="eth${itf_nr}"
+  if [ $is_vlan -eq "0" ]; then
+    vlan_itf=${eth_itf_name}
+  else
+    vlan_itf=${eth_itf_name}.${vlan_id}
+  fi
+
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+      # flush previous address(es)
+      ip -4 addr flush dev ${vlan_itf}
+      ip -6 addr flush dev ${vlan_itf}
+  fi
+
+  ethnetwork=`ipcalc -sn ${eth_addr}/${prefix} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+  # setup network configuration for normal state
+  ip -4 addr add ${eth_addr}/${prefix} dev ${vlan_itf}
+
+  # if router controller supported and not in bridged mode, configure internal vlan mgmt address  and 
+  # route protobuf address towards router controller
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+      ip -6 addr add ${ipv6_address}/64 dev ${vlan_itf}
+      ip -6 route add ${ipv6_prefix}/${ipv6_prefixlen} dev ${vlan_itf} via ${ipv6_gateway}
+  else
+      ip -6 addr add ${ipv6_address}/${ipv6_prefixlen} dev ${vlan_itf}
+  fi
+
+
+  if [ $num_addresses -gt 0 ]; then # bridged(shared subnet mode)
+      # route for non-local hosts should go via air interface
+      ip -4 route delete ${ethnetwork}/${prefix} dev ${vlan_itf}
+      ip -4 route add ${a} dev ${vlan_itf} src ${eth_addr}
+      eval "a=\$address0/32"
+ else # $num_addresses = 0 (dedicated mode)
+    eval "a=$eth_addr/$prefix"
+  fi
+ 
+
+  # In case external router board is present and no-NAT, it's the router board to act as an arp proxy
+  if [ "${CFG_routercontroller_supported}" -eq 1 -a ! "$nat_enabled" ]; then
+      /sbin/sysctl -w net.ipv4.conf.${vlan_itf}.arp_ignore=1
+  else
+      # In bridged mode and (no external router board or external router board + NAT), main board acts as an arp proxy, replying to 
+      # all arp requests with its own MAC address.
+      if [ $num_addresses -gt 0 ]; then
+          /sbin/sysctl -w net.ipv4.conf.${vlan_itf}.proxy_arp=1
+          /sbin/sysctl -w net.ipv4.neigh.${vlan_itf}.proxy_delay=0
+          /sbin/sysctl -w net.ipv4.conf.${vlan_itf}.arp_ignore=0
+      else
+          # SMS-2186: In routed mode, only reply to requests for your own IP address, not for any IP address on the terminal (which could be the
+          # IP address of another vlan).
+          /sbin/sysctl -w net.ipv4.conf.${vlan_itf}.arp_ignore=1
+      fi
+  fi
+
+  #make sure the (new) interface is up
+  ip link set up dev ${vlan_itf}
+
+  x=0
+  logger -t $0 -p daemon.info "debug: logging ipv4 subnets."
+  while [ $x -lt "$num_ipv4_subnets" ]; do
+     eval p="\$prefixipv4subnet$x"
+     eval pl="\$prefixlenipv4subnet$x"
+     eval gw="\$gatewayipv4subnet$x"
+     if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+         p=`ipcalc -sn ${p}/${pl} | sed -n "s/NETWORK=\(.*\)/\1/p"`
+         gw=${ipv4_gateway}
+     fi
+
+    logger -t $0 -p daemon.info "debug: route ${x}: ${p}/${pl} gw ${gw} dev ${vlan_itf}"
+    ip -4 route add ${p}/${pl} via ${gw} dev ${vlan_itf} 
+    x=$(( $x + 1 ))
+  done
+
+  # if router controller is supported, router ipv6 subnets via router controller
+  if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+    x=0
+    logger -t $0 -p daemon.info "debug: logging ipv6 subnets."
+    while [ $x -lt "$num_ipv6_subnets" ]; do
+       eval p="\$prefixipv6subnet$x"
+       eval pl="\$prefixlenipv6subnet$x"
+      logger -t $0 -p daemon.info "debug: route ${x}: ${p}/${pl} gw ${ipv6_gateway}"
+      ip -6 route add ${p}/${pl} via ${ipv6_gateway} dev ${vlan_itf}
+      x=$(( $x + 1 ))
+    done
+  fi
+
+  if [ "${CFG_routercontroller_supported}" -ne 1 ]; then
+    # SMS-2214: The mcast needs to be present in the filter. Otherwise, igmpd will not see igmp membership reports (sent to the group being
+    #           reported, so could be any possible multicast address).
+    echo "any_arp,system,multi_ip4_igmp,multi_ip6_mld" > /sys/class/net/${vlan_itf}/netring_host_filter
+  else
+    # Traffic between the CPE and this main-board goes over the add-in board.
+    # SMS-5859: Remove multicast-related filters.  Multicast is only supported for native vlan and has dedicated vlan interfaces;
+    #           IGMP is received on the local management interface.
+    # The only reason why we cannot close this filter completely is to support:
+    #           - (local) SNMP
+    #           - ARP-proxying by Linux-stack in case of shared-subnet mode
+    #           - PXE-boot (tftp) of addin-board of MDM5010
+    echo "any_arp,system" > /sys/class/net/${vlan_itf}/netring_host_filter
+  fi
+
+  # if configured, route local TCS server towards LAN (in order to test TCS-terminal protobuf locally)
+  if [ $is_vlan -eq "0" ]; then # native vlan
+      if [  -n "$localTcsServer"  ]; then
+          ip -4 route del ${localTcsServer} dev ${vlan_itf} 2&> /dev/null 
+          if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+              ip -4 route add  ${localTcsServer} dev ${vlan_itf} via ${ipv4_gateway}
+          else
+              ip -4 route add  ${localTcsServer} dev ${vlan_itf}
+          fi
+      fi
+  fi
+}
+
+apply_mtu() {
+    if [ -n "${mtu}" -a "${mtu}" -gt "1760" ]; then
+        logger -t $0 -p daemon.error "Requested MTU was bigger than 1760! Setting maximum MTU size on eth0 to 1760!!"
+        mtu=1760
+    fi
+
+    # the modem MTU is set by the ReturnLinkManager in the modem_controller. It is different based on return technology.
+    # if mtu is 0, it means that the MTU field in the protobuf msg (received by modemcontroller from tcs) is NOT filled in.
+    # In that case we use all the default MTU's of 1500 Bytes for backward compatibility.
+    if [ "${mtu}" -eq "0" ]; then
+        ip link set ${vlan_itf} mtu 1500
+        mtu=1500
+    else
+        ip link set ${vlan_itf} mtu ${mtu}
+    fi
+    logger -t $0 -p daemon.debug "MTU was set to ${mtu}."
+}
+
+# Main
+
+if [ $# -lt 14 ]; then
+  echo "usage: network <filename> <version>"
+  echo "               <eth itf> <is_vlan> <vlan id> <nat enabled>"
+  echo "               <num addresses> [<address 0> ...]"
+  echo "               <eth_addr> <prefix> <ipv4_gateway>"
+  echo "               <ipv6 enable> <ipv6 prefix> <ipv6 prefix length> <ipv6 eth_addr> "
+  echo "               <num ipv4 subnets> [<subnet 0 prefix> <subnet 0 prefix length> <subnet 0 eth_addr> ... ]"
+  echo "               <mtu>"
+  exit 1
+fi
+
+filename=$1
+version=$2
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+  echo "script skipped because Tellinet is running on the add-in board."
+  exit 0
+fi
+
+itf_nr=$3
+is_vlan=$4
+vlan_id=$5
+nat_enabled=$6
+
+num_addresses=$7
+
+n=0
+while [ $n -lt "$num_addresses" ]; do
+  eval "address${n}=$8"
+  shift
+  n=$(( $n + 1 ))
+done
+
+eth_addr=$8
+prefix=$9
+ipv4_gateway=$10
+
+# extra ipv4 routes
+num_ipv4_subnets=${11}
+x=0
+while [ $x -lt "$num_ipv4_subnets" ]; do
+  eval prefixipv4subnet${x}=\"${12}\"
+  shift
+  x=$(( $x + 1 ))
+done
+x=0
+while [ $x -lt "$num_ipv4_subnets" ]; do
+  eval prefixlenipv4subnet${x}=\"${12}\"
+  shift
+  x=$(( $x + 1 ))
+done
+x=0
+while [ $x -lt "$num_ipv4_subnets" ]; do
+  eval gatewayipv4subnet${x}=\"${12}\"
+  shift
+  x=$(( $x + 1 ))
+done
+
+# IPv6 settings
+ipv6_enable="${12}"
+ipv6_prefix="${13}"
+ipv6_prefixlen="${14}"
+ipv6_address="${15}"
+ipv6_gateway="${16}"
+
+# extra ipv6 routes
+num_ipv6_subnets=${17}
+x=0
+while [ $x -lt "$num_ipv6_subnets" ]; do
+  eval prefixipv6subnet${x}=\"${18}\"
+  shift
+  x=$(( $x + 1 ))
+done
+x=0
+while [ $x -lt "$num_ipv6_subnets" ]; do
+  eval prefixlenipv6subnet${x}=\"${18}\"
+  shift
+  x=$(( $x + 1 ))
+done
+x=0
+while [ $x -lt "$num_ipv6_subnets" ]; do
+  eval gatewayipv6subnet${x}=\"${18}\"
+  shift
+  x=$(( $x + 1 ))
+done
+x=0
+while [ $x -lt "$num_ipv6_subnets" ]; do
+  eval enablePrefixDelegation${x}=\"${18}\"
+  shift
+  x=$(( $x + 1 ))
+done
+
+# local TCS server (internal test only - to test TCS terminal communication locally)
+localTcsServer=${18}
+
+# maximum transmission unit
+mtu=${19}
+
+#debug
+echo "Number of IP addresses: $num_addresses"
+n=0
+while [ $n -lt "$num_addresses" ]; do
+  eval "a=\$address${n}"
+  echo "#$n: $a"
+  let "n += 1"
+done
+echo "Prefix: $prefix"
+echo "eth_addr address: $eth_addr"
+
+if [ $ipv6_enable ]; then
+    echo "IPv6 Prefix: $ipv6_prefix/$ipv6_prefixlen"
+    echo "IPv6 Address: $ipv6_address"
+    echo "IPv6 Gateway: $ipv6_gateway"
+fi
+
+x=0
+while [ $x -lt "$num_ipv4_subnets" ]; do
+  eval echo "\$prefixipv4subnet$x/\$prefixlenipv4subnet$x via \$gatewayipv4subnet$x "
+  let "x += 1"
+done
+ 
+x=0
+while [ $x -lt "$num_ipv6_subnets" ]; do
+  eval echo "\$prefixipv6subnet$x/\$prefixlenipv6subnet$x via \$gatewayipv6subnet$x "
+  let "x += 1"
+done
+
+get_netconfig
+configure_vlan
+apply_mtu
+
+logger -t $0 -p daemon.info "$filename version $version applied."
+
+exit 0

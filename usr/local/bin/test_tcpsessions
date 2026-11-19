@@ -1,0 +1,55 @@
+#!/bin/sh
+
+ERROR=1
+SUCCESS=0
+
+if [ -f /var/state/test_output_tcpsessions ]; then
+    rm /var/state/test_output_tcpsessions
+fi
+
+result=`/usr/local/bin/s3p getstate | grep "general: MODEM_STATE_STARTUP_SYNCHRONIZED" `
+result2=`/usr/local/bin/s3p getstate | grep "general: MODEM_STATE_STARTUP_NORMAL_OPER" `
+if [ "${result}" == "" -a "${result2}" == "" ]; then
+    echo "TCP Sessions: unknown" >> /var/state/test_output_tcpsessions
+    return $ERROR
+fi
+
+accelerationenabled=`/usr/local/bin/cliclient GetLayer3Data -g RequestData.Layer3Data | grep "tellitec_tcp_acceleration" | sed -n 's/^tellitec_tcp_acceleration=\([01]\)/\1/p'`
+if [ -z "${accelerationenabled}" -o "${accelerationenabled}" -ne "1" ]; then
+    echo "TCP Sessions: unknown (acceleration disabled)" >> /var/state/test_output_tcpsessions
+    return $SUCCESS
+fi
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_tellinet_on_addin_board
+
+if [ "${tellinet_on_addin_board}" -eq 1 ]; then
+    . /usr/local/bin/ifcfg_internal_mgmt.sh
+    destination="${IM_ADDINBOARD_IP}"
+else
+    destination="localhost"
+fi
+port=10010
+
+tcpsessions=`echo "get statistics.association.connections.count" | nc ${destination} ${port} | grep statistics.association.connections.count | cut -d " " -f 5 | dos2unix`
+# Test that result exists and is an integer
+if [ -z "${tcpsessions}" -o "${tcpsessions}" -ne "${tcpsessions}" ]; then
+    echo "TCP Sessions: unknown" >> /var/state/test_output_tcpsessions
+    return $ERROR
+fi
+maxsessions=`echo "get statistics.association.connections.max" | nc ${destination} ${port} | grep statistics.association.connections.max | cut -d " " -f 5 | dos2unix`
+# Test that result exists and is an integer
+if [ -z "${maxsessions}" -o "${maxsessions}" -ne "${maxsessions}" ]; then
+    echo "TCP Max Sessions: unknown" >> /var/state/test_output_tcpsessions
+    return $ERROR
+fi
+
+echo "TCP Sessions: ${tcpsessions}" >> /var/state/test_output_tcpsessions
+
+# Test that it is within limits
+if [ "${tcpsessions}" -gt "${maxsessions}" ]; then
+    echo "Maximum number of TCP sessions exceeded" >> /var/state/test_output_tcpsessions
+    return $ERROR
+fi
+
+return $SUCCESS

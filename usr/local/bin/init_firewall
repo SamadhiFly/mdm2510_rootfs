@@ -1,0 +1,42 @@
+#!/bin/sh
+#set -e -x
+
+. /etc/parse_modem_netdev.sh
+
+IPT="/usr/sbin/iptables"
+
+get_syslogconfig() {
+ cfg_syslogmode=`sed -n "s/^syslogmode=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogport=`sed -n "s/^syslogport=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_syslogaddr=`sed -n "s/^syslogaddr=\(.*\)$/\1/p" /var/state/cfg`
+}
+
+if [ $# -lt 1 ]; then
+  echo "usage: init_firewall <rule key>"
+  echo "        The <rule key> is a unique key identifying the iptables rules that are added."
+  echo "        This allows selective removal of keys later on."
+  echo "        This key should probably look something like *IPTKEY:FW*"
+  exit 1
+fi
+
+key=$1
+keyComment="-m comment --comment ${key}"
+
+
+
+#  block IGMP messages when joining/leaving a multicast group 
+${IPT} -A OUTPUT -p igmp -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+#  block ICMP destination-unreachable messages leaving the modem interface
+${IPT} -A OUTPUT -p icmp --icmp-type destination-unreachable -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+
+
+get_syslogconfig
+
+if [ "$syslogmode" = 1 ]; then
+   ${IPT} -A OUTPUT -d ${syslogaddr} -p udp --dport ${cfg_syslogport} -o ${modem_netdev_generic_mod} -j DROP ${keyComment}
+fi
+
+# open openamip port
+/usr/local/bin/update_acu_fw "*IPTKEY:ACU*"
+
+exit 0

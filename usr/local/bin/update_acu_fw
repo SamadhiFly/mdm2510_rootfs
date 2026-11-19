@@ -1,0 +1,69 @@
+#!/bin/sh
+
+IPT="/usr/sbin/iptables"
+
+. /usr/local/bin/parse_var_state_cfg.sh
+parse_routercontroller_supported
+
+get_openamipflashconfig() {
+ cfg_addr=`sed -n "s/^openamipacuaddr=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_port=`sed -n "s/^openamipacuport=\(.*\)$/\1/p" /var/state/cfg`
+ cfg_enabled=`sed -n "s/^automaticptenabled=\(.*\)$/\1/p" /var/state/cfg`
+}
+
+############ MAIN ############
+
+if [ $# -eq 1 ]; then
+  get_openamipflashconfig
+  key=$1
+elif [ $# -eq 4 ]; then
+  cfg_enabled=$1
+  cfg_addr=$2
+  cfg_port=$3
+  key=$4
+else
+  echo "usage: update_acu_fw <addr> <port> <rule key>"
+  echo "    enabled Indicates if automatic pointing is enabled"
+  echo "    addr The ip address of the ACU"
+  echo "    port The TCP port at which the ACU is listening"
+  echo "    The <rule key> is a unique key identifying the iptables rules that are added."
+  echo "        This allows selective removal of keys later on."
+  echo "        This key should probably look something like *IPTKEY:FW*."
+  exit 1
+fi
+
+addRules=0
+if [ -n "${cfg_enabled}" ]; then
+    if [ "${cfg_enabled}" -eq 1 -a -n "${cfg_addr}" -a -n "${cfg_port}" ]; then
+        addRules=1
+    fi
+fi
+
+keyWithInfo="${key} ${cfg_addr} ${cfg_port}"
+keyComment="-m comment --comment \"${keyWithInfo}\""
+
+allRules=`${IPT} -S | grep -F "\"${key}"`
+if [ "${addRules}" -eq 1 ]; then
+    # all rules without the ones we need
+    oldRules=`echo "${allRules}" | grep -v -e "\"${keyWithInfo}"`
+    
+    if [ "${allRules}" == "${oldRules}" ]; then
+        if [ "${CFG_routercontroller_supported}" -eq 1 ]; then
+            IF=eth0.3010
+        else
+            IF=eth0
+        fi
+        # All rules are old and will be removed: add new rules, old ones will be removed below
+        eval ${IPT} -A OUTPUT -o ${IF} -p tcp -d ${cfg_addr} --dport ${cfg_port} -j ACCEPT -m comment --comment \"${keyWithInfo}\"
+        eval ${IPT} -A INPUT -i ${IF} -p tcp -s ${cfg_addr} --sport ${cfg_port} -j ACCEPT -m comment --comment \"${keyWithInfo}\"
+    else
+        # There are no rules to be removed: do nothing (nothing changed)
+        oldRules=""
+    fi
+else
+    oldRules="${allRules}"
+fi
+
+if [ "${oldRules}" != "" ]; then
+    echo "${oldRules}" | sed 's/^-A //' | while read rule; do eval "${IPT} -D $rule"; done;
+fi

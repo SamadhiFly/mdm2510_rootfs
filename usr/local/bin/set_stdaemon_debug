@@ -1,0 +1,14 @@
+#!/bin/sh
+if [ ! -e "/var/run/st0899d.pid" ]; then
+  echo "Daemon is not running!"
+  exit 0
+fi
+
+case "$1" in
+  activate)
+    kill -USR1 `cat /var/run/st0899d.pid`
+    ;;
+  deactivate)
+    kill -USR2 `cat /var/run/st0899d.pid`
+    ;;
+esac

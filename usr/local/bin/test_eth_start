@@ -1,0 +1,39 @@
+#!/bin/sh   
+
+retval=1
+rm -f /var/state/test_*_eth #remove output/fail files of previous runs of this test
+
+echo "test_eth: running" >> /var/state/test_report
+
+if [ $# != 1 ]; then
+    sed "s/test_eth: running/test_eth: not enough parameters/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+    return $retval
+fi
+
+ipv6only=$1
+
+/usr/local/bin/test_eth_link_status
+retval1=$?
+if [ "$ipv6only" = 0 ]; then
+    /usr/local/bin/test_arp_contents
+    retval2=$?
+    /usr/local/bin/test_dhcp_status
+    retval3=$?
+else
+    echo "arp cache test is not available" >> /var/state/test_fail_eth
+    retval2=0
+    echo "dhcp test is not available" >> /var/state/test_fail_eth
+    retval3=0
+fi
+if [ "$retval1" = 0 -a "$retval2" = 0 -a "$retval3" = 0 ]
+then
+    sed "s/test_eth: running/test_eth: ok/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+    retval=0
+else
+    sed "s/test_eth: running/test_eth: nok/" </var/state/test_report >/var/state/test_report_n
+    mv /var/state/test_report_n /var/state/test_report
+fi
+
+return $retval

@@ -1,0 +1,4 @@
+#!/bin/sh
+trppopid=$1
+sed -i "s#^trppopid=.*#trppopid=$trppopid#" /var/state/cfg
+/usr/local/bin/writecfg

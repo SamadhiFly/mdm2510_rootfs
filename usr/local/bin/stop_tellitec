@@ -1,0 +1,25 @@
+#!/bin/sh
+
+
+PIDFILE="/var/run/tc-net-client.pid"
+
+stop_tellitec() {
+  if [ -e ${PIDFILE} ]; then
+    kill `cat ${PIDFILE}`
+    rm -f ${PIDFILE}
+  fi
+  n=0
+  while pidof tc-net-client >/dev/null; do
+    sleep 1
+    n=$(( $n + 1 ))
+    if [ $n -gt 10 ]; then
+      logger -t $0 -p daemon.err "timeout waiting for tc-net-client to shut down"
+      break
+    fi
+  done
+  killall -9 tc-net-client
+}
+
+# Main
+stop_tellitec
+exit 0

@@ -1,0 +1,56 @@
+#!/bin/sh
+
+# check_overlap test_ipaddr test_prefix reserved_ipaddr reserved_prefix
+check_overlap() {
+  overlap=0
+  if [ $2 -lt $4 ]; then
+    minprefix=$2
+  else
+    minprefix=$4
+  fi
+  broadcast1=`ipcalc -sb "${1}/${minprefix}" | sed -n "s/BROADCAST=\(.*\)/\1/p"`
+  broadcast2=`ipcalc -sb "${3}/${minprefix}" | sed -n "s/BROADCAST=\(.*\)/\1/p"`
+  if [ "$broadcast1" = "$broadcast2" ]; then
+    network2=`ipcalc -sn "${3}/${minprefix}" | sed -n "s/NETWORK=\(.*\)/\1/p"`
+    netmask2=`ipcalc -sn "${3}/${minprefix}" | sed -n "s/NETMASK=\(.*\)/\1/p"`
+    overlap=1
+  fi
+}
+
+ipaddr=$(expr match "$1" "\([0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\)")
+netmask=$(expr match "$2" "\([0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\)")
+if [ -z "$ipaddr" -o -z "$netmask" ]; then
+  echo "invalid IP address/netmask: incorrect format!" >&2
+  exit 1
+fi
+
+prefix=`ipcalc -sp "$ipaddr" "$netmask" | sed -n "s/PREFIX=\(.*\)/\1/p"`
+if [ -z "$prefix" -o $? != 0 ]; then
+  echo "invalid IP address/netmask: incorrect format!" >&2
+  exit 1
+fi
+
+check_overlap "$ipaddr" "$prefix" "10.0.0.0" "8"
+if [ $overlap = 0 ]; then
+  check_overlap "$ipaddr" "$prefix" "172.16.0.0" "12"
+  if [ $overlap = 0 ]; then
+    check_overlap "$ipaddr" "$prefix" "192.168.0.0" "16"
+    if [ $overlap = 0 ]; then
+      echo "invalid IP address/netmask: not in a private IP address range" >&2
+      exit 3
+    fi
+  fi
+fi
+
+modemipaddr=`sed -n "s/^modemipaddr=\(.*\)$/\1/p" /var/state/cfg`
+if [ -z "$modemipaddr" ]; then
+  modemipaddr="10.0.0.1"
+fi
+modemprefix="32"
+check_overlap "$ipaddr" "$prefix" "$modemipaddr" "$modemprefix"
+if [ $overlap = 1 ]; then
+    echo "invalid IP address/netmask: overlap with reserved IP address $modemipaddr" >&2
+    exit 2
+fi
+
+exit 0

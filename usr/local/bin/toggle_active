@@ -1,0 +1,2 @@
+#!/bin/sh
+/sbin/confirm_modeswitch_or_upgrade_successfull.sh

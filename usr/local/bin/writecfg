@@ -1,0 +1,86 @@
+#!/bin/sh
+
+MODEMNAME=`cat /proc/device-tree/model`
+TMPCFG=/var/state/cfg-$$
+TMPDONE=/var/state/done-$$
+TFTPCFG=/var/state/tftp-cfg-$$
+
+if [ -z "$LOCK" ]; then
+	LOCK=/var/run/cfg.lock
+	export LOCK
+	flock -x $LOCK "$0" "$@"
+	exit $?
+fi
+
+# returns the string "<active_device> <redundant_device>"
+# devices separated by a space
+show_active_redundant_device()
+{
+	DEVA="$1"
+	DEVB="$2"
+	if [ -n "$DEVA" ]; then shift; fi
+	if [ -n "$DEVB" ]; then shift; fi
+
+	case "`/usr/sbin/modemconfigtool $@ state "$DEVA"`:`/usr/sbin/modemconfigtool $@ state "$DEVB"`" in
+	good:*)
+		echo "$DEVA" "$DEVB"
+		;;
+	*:good)
+		echo "$DEVB" "$DEVA"
+		;;
+	*:corrupt)
+		echo "$DEVA" "$DEVB"
+		;;
+	*)
+		echo "$DEVB" "$DEVA"
+		;;
+	esac
+}
+
+cp /var/state/cfg "$TMPCFG"
+
+if [ `stat -t "$TMPCFG" | cut -d' ' -f 2 2>/dev/null` -eq 0 ]; then
+	logger -t writecfg -p 1 "ERROR: $TMPCFG is empty: aborting"
+	exit 1
+fi
+
+case "$MODEMNAME" in
+*MDM2210*|*MDM3310*|*MDM5010*|*MDM2510*|*MDM2010*)
+	ORDER=`show_active_redundant_device /dev/cfg0 /dev/cfg1 -r -s0x1000`
+	ACTIVE=`echo $ORDER | cut -d' ' -f 1`
+	REDUNDANT=`echo $ORDER | cut -d' ' -f 2`
+
+	# create keys file from the active environment before starting to overwrite
+	/usr/sbin/modemconfigtool -r -s0x1000 read "$ACTIVE" | sed -e "s,=.*$,,g" > "$TMPDONE"
+
+	# abort if keys file can not be generated, since this would result in an empty uboot env, which bricks the modem
+	if [ `stat -t "$TMPDONE" | cut -d' ' -f 2 2>/dev/null` -eq 0 ]; then
+		logger -t writecfg -p 1 "$TMPDONE is empty: aborting"
+		exit 1
+	fi
+
+	# use keys file to only put the wanted keys in the environment
+	# write redundant environment first, append and remove flags are added to recover from
+	# a corrupt environment
+	/usr/sbin/modemconfigtool -r -s0x1000 update -ax "$REDUNDANT" -k "$TMPDONE" -i "$TMPCFG"
+	/usr/sbin/modemconfigtool -r -s0x1000 update -ax "$ACTIVE" -k "$TMPDONE" -i "$TMPCFG"
+
+	# regenerate the list of variable names to exclude from /mnt/config/config
+	/usr/sbin/modemconfigtool -r -s0x1000 read "$ACTIVE" | sed -e "s,=.*$,,g" > "$TMPDONE"
+
+	/usr/sbin/modemconfigtool -r -o "hdrsep,grow,sep=nl,00" update -ax /mnt/config/config -k "$TMPDONE" -o "invertkeys" -i "$TMPCFG"
+	;;
+*AMC5001*)
+	echo "Saving modem configuration in /var/state/xxx files, flash may be protected" >&2
+	/usr/sbin/modemconfigtool -s0x1000 update -x "/dev/ubootenv" -i "$TMPCFG" -w "/var/state/ubootenv"
+	/usr/sbin/modemconfigtool -s0x1000 -k /etc/mdmcfg-prod.conf update -ax "/dev/productiontag" -i "$TMPCFG" -w "/var/state/productiontag"
+	/usr/sbin/modemconfigtool -o "grow" -k /etc/mdmcfg-cal.conf write "/var/state/modcalibration" -i "$TMPCFG"
+	# writing the remaining names into the TFTP'd file makes no real sense?
+	;;
+*)
+	logger -t writecfg -p 1 "unknown modem type '$MODEMNAME'"
+	exit 1
+	;;
+esac
+
+rm -rf "$TMPCFG" "$TMPDONE"
